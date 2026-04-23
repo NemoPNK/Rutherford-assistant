@@ -1,4 +1,5 @@
 Write-Host "Welcome on La Roche"
+Write-Host "Thank you for your patience, it may take some time."
 
 $ErrorActionPreference = "Stop"
 
@@ -66,6 +67,68 @@ function Remove-WindowsCapabilityIfPresent {
     }
 }
 
+function Remove-AppxEverywhere {
+    param(
+        [Parameter(Mandatory=$true)][string]$Name
+    )
+
+    Write-Host "Removing Appx: $Name ..."
+
+    try {
+        Get-AppxPackage -Name $Name -AllUsers -ErrorAction SilentlyContinue | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue
+    } catch { }
+
+    try {
+        Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -eq $Name } | ForEach-Object {
+            Remove-AppxProvisionedPackage -Online -PackageName $_.PackageName -ErrorAction SilentlyContinue | Out-Null
+        }
+    } catch { }
+}
+
+# Helper functions for Windows 11 Start menu policy
+function Get-WindowsBuildNumber {
+    try {
+        return [int](Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name CurrentBuildNumber -ErrorAction Stop).CurrentBuildNumber
+    }
+    catch {
+        return 0
+    }
+}
+
+function Set-Windows11StartPolicy {
+    $buildNumber = Get-WindowsBuildNumber
+    $startPolicyManagerPath = "HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start"
+    $startExplorerPolicyPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer"
+    $startLayoutDirectory = "C:\ProgramData\Rutherford"
+    $startLayoutFile = Join-Path $startLayoutDirectory "StartPins.json"
+    $layoutJson = '{"pinnedList":[]}'
+
+    if (-not (Test-Path $startLayoutDirectory)) {
+        New-Item -Path $startLayoutDirectory -ItemType Directory -Force | Out-Null
+    }
+
+    Set-Content -Path $startLayoutFile -Value $layoutJson -Encoding UTF8
+
+    if (-not (Test-Path $startPolicyManagerPath)) {
+        New-Item -Path $startPolicyManagerPath -Force | Out-Null
+    }
+
+    if (-not (Test-Path $startExplorerPolicyPath)) {
+        New-Item -Path $startExplorerPolicyPath -Force | Out-Null
+    }
+
+    New-ItemProperty -Path $startExplorerPolicyPath -Name "HideRecommendedSection" -Value 1 -PropertyType DWord -Force | Out-Null
+
+    if ($buildNumber -ge 26100) {
+        New-ItemProperty -Path $startPolicyManagerPath -Name "ConfigureStartPins" -Value $layoutJson -PropertyType String -Force | Out-Null
+        New-ItemProperty -Path $startExplorerPolicyPath -Name "ConfigureStartPins" -Value $startLayoutFile -PropertyType String -Force | Out-Null
+        Write-Host "Windows 11 Start policy applied: Recommended hidden and Pinned section emptied."
+    }
+    else {
+        Write-Host "Recommended section hidden. Empty pinned layout skipped because ConfigureStartPins is only reliably supported on newer Windows 11 builds."
+    }
+}
+
 if (-not (Test-IsAdmin)) {
     Write-Host "This script must be run as Administrator."
     exit 1
@@ -83,7 +146,6 @@ if (Test-Path $sourcePath) {
     Copy-Item -Path (Join-Path $sourcePath "*") -Destination $destinationPath -Recurse -Force
     Write-Host "OPS folder copied to C:\"
     
-    # Ajout du dossier OPS dans l'accès rapide
     try {
         $shell = New-Object -ComObject Shell.Application
         $folder = $shell.Namespace($destinationPath)
@@ -135,57 +197,7 @@ else {
 # Suppression des applications (UWP/Appx) indésirables
 # NOTE: Certaines applis (ex: OneDrive / Office desktop) ne sont pas des Appx et nécessitent un traitement séparé.
 
-function Remove-AppxEverywhere {
-    param(
-        [Parameter(Mandatory=$true)][string]$Name
-    )
-
-    Write-Host "Removing Appx: $Name ..."
-
-    # Remove for existing users
-    try {
-        Get-AppxPackage -Name $Name -AllUsers -ErrorAction SilentlyContinue | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue
-    } catch { }
-
-    # Remove provisioned (so it won't come back for new users)
-    try {
-        Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -eq $Name } | ForEach-Object {
-            Remove-AppxProvisionedPackage -Online -PackageName $_.PackageName -ErrorAction SilentlyContinue | Out-Null
-        }
-    } catch { }
-}
-
-# Helper function to unpin apps from Start via policy
-function Unpin-AppsFromStart {
-    param(
-        [Parameter(Mandatory=$true)][string[]]$AppNames
-    )
-
-    $startPinsPath = "HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start"
-    $policyManagerPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer"
-
-    $appJson = ($AppNames | ForEach-Object {
-        @{ desktopAppLink = ""; packagedAppId = $_ }
-    }) | ConvertTo-Json -Compress
-
-    $startLayoutJson = "{`"pinnedList`":$appJson}"
-
-    if (-not (Test-Path $startPinsPath)) {
-        New-Item -Path $startPinsPath -Force | Out-Null
-    }
-
-    if (-not (Test-Path $policyManagerPath)) {
-        New-Item -Path $policyManagerPath -Force | Out-Null
-    }
-
-    New-ItemProperty -Path $startPinsPath -Name "ConfigureStartPins" -Value $startLayoutJson -PropertyType String -Force | Out-Null
-    New-ItemProperty -Path $policyManagerPath -Name "ConfigureStartPins" -Value $startLayoutJson -PropertyType String -Force | Out-Null
-
-    Write-Host "Start menu pins policy applied."
-}
-
 $appsToRemove = @(
-    # Jeux Microsoft / Gaming
     "Microsoft.MicrosoftSolitaireCollection",
     "Microsoft.XboxApp",
     "Microsoft.XboxGamingOverlay",
@@ -195,24 +207,20 @@ $appsToRemove = @(
     "Microsoft.XboxGameOverlay",
     "Microsoft.XboxSpeechToTextOverlay",
 
-    # Réseaux sociaux / grand public
     "7EE7776C.LinkedInforWindows",
     "Facebook.Facebook",
     "TikTok.TikTok",
     "Instagram.Instagram",
 
-    # Multimédia
     "SpotifyAB.SpotifyMusic",
-    "Clipchamp.Clipchamp",
+    "Clipchamp.Clipchamp", 
     "Microsoft.ZuneMusic",
     "Microsoft.ZuneVideo",
 
-    # Communication
     "MicrosoftTeams",
     "MSTeams",
     "Microsoft.SkypeApp",
 
-    # Apps Microsoft inutiles
     "Microsoft.BingNews",
     "Microsoft.News",
     "Microsoft.Weather",
@@ -221,12 +229,10 @@ $appsToRemove = @(
     "Microsoft.Getstarted",
     "Microsoft.WindowsFeedbackHub",
 
-    # Mail / organisation
     "microsoft.windowscommunicationsapps",
     "Microsoft.Todos",
     "Microsoft.OutlookForWindows",
 
-    # Office / Hub
     "Microsoft.MicrosoftOfficeHub",
     "Microsoft.Office.Desktop",
     "Microsoft.Office.OneNote"
@@ -238,8 +244,7 @@ foreach ($app in $appsToRemove) {
 
 Write-Host "Unwanted Appx application removal complete."
 
-# Microsoft Store (déconseillé en entreprise car Winget/MAJ/Apps peuvent dépendre du Store)
-# Mets à $true uniquement si tu es sûr.
+# Microsoft Store
 $RemoveMicrosoftStore = $false
 if ($RemoveMicrosoftStore) {
     Remove-AppxEverywhere -Name "Microsoft.WindowsStore"
@@ -247,32 +252,11 @@ if ($RemoveMicrosoftStore) {
 }
 
 # Widgets / News and Interests policy (Windows 10/11)
-# (garde ta partie existante juste après)
-
 Ensure-RegistryValue -Path "HKLM:\Software\Policies\Microsoft\Dsh" -Name "AllowNewsAndInterests" -Value 0 -PropertyType DWord
-
 Write-Host "Widjet removed"
 
-# Unpin unwanted applications from Start
-# NOTE: Start pin management is policy-based on Windows 11 and is best-effort depending on edition/build.
-$appsToUnpinFromStart = @(
-    # Microsoft Office suite shortcuts
-    "Microsoft.Office.Word",
-    "Microsoft.Office.Excel",
-    "Microsoft.Office.PowerPoint",
-    "Microsoft.Office.Outlook",
-    "Microsoft.Office.OneNote",
-
-    # Microsoft Edge / Store / Photos / Power / LinkedIn
-    "Microsoft.MicrosoftEdge.Stable",
-    "Microsoft.WindowsStore",
-    "Microsoft.Windows.Photos",
-    "Microsoft.PowerAutomateDesktop",
-    "7EE7776C.LinkedInforWindows"
-)
-
-Unpin-AppsFromStart -AppNames $appsToUnpinFromStart
-Write-Host "Requested apps unpinned from Start (policy-based)."
+Set-Windows11StartPolicy
+Write-Host "Start menu policy processed."
 
 # Uninstall OneDrive (non-Appx)
 Write-Host "Uninstalling OneDrive..."
@@ -291,7 +275,6 @@ if (Test-Path $oneDriveSetup64) {
     Write-Host "OneDriveSetup.exe not found (maybe already removed)."
 }
 
-# Nettoyage restes OneDrive (optionnel)
 Remove-Item -Path "$env:LOCALAPPDATA\Microsoft\OneDrive" -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path "$env:PROGRAMDATA\Microsoft OneDrive" -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path "$env:SYSTEMDRIVE\OneDriveTemp" -Recurse -Force -ErrorAction SilentlyContinue
@@ -360,7 +343,9 @@ Write-Host "Tactile keyboard set"
 
 Write-Step "Restarting Explorer"
 try {
+    Stop-Process -Name StartMenuExperienceHost -Force -ErrorAction SilentlyContinue
     Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
     Start-Process explorer.exe
 }
 catch {
@@ -378,5 +363,4 @@ Write-Host "OPS copied to C:\"
 Write-Host "Touch keyboard configured"
 Write-Host "OneDrive removed"
 Write-Host "Microsoft Store removal toggle available"
-
-Write-Host "Requested Start pins policy applied"
+Write-Host "Recommended hidden; pinned section handling applied when supported by Windows 11 build"

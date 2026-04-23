@@ -14,7 +14,7 @@ echo ======================================
 echo.
 echo Available commands:
 echo   setup   = run LaRoche.ps1
-echo   network = run Network.ps1
+echo   network = run Network.ps1 NE PAS UTILISER CE N'EST PAS FINI 
 echo   exit    = quit
 
 echo.
