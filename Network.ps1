@@ -126,3 +126,18 @@ foreach ($profile in $networkProfiles) {
 Write-Step "Summary"
 Write-Host "Network adapters configured successfully."
 Write-Host "Check adapter names with: Get-NetAdapter"
+
+Write-Step "Network adapters summary"
+
+Get-NetAdapter | Format-Table -AutoSize Name, InterfaceDescription, Status, MacAddress, LinkSpeed
+
+Write-Host ""
+Write-Host "IPv4 configuration:"
+Get-NetIPConfiguration | Format-List InterfaceAlias, InterfaceDescription, IPv4Address, IPv4DefaultGateway, DNSServer
+
+Write-Host ""
+Write-Host "Detailed adapter info:"
+Get-NetAdapter | ForEach-Object {
+    Write-Host "----------------------------------------"
+    Get-NetIPAddress -InterfaceAlias $_.Name -AddressFamily IPv4 -ErrorAction SilentlyContinue | Format-Table -AutoSize InterfaceAlias, IPAddress, PrefixLength
+}

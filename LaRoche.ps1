@@ -280,6 +280,78 @@ Remove-Item -Path "$env:PROGRAMDATA\Microsoft OneDrive" -Recurse -Force -ErrorAc
 Remove-Item -Path "$env:SYSTEMDRIVE\OneDriveTemp" -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "OneDrive removal complete."
 
+# Disable some Windows features / consumer experiences
+Ensure-RegistryValue -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent" -Name "DisableConsumerFeatures" -Value 1 -PropertyType DWord
+Ensure-RegistryValue -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent" -Name "DisableWindowsConsumerFeatures" -Value 1 -PropertyType DWord
+Ensure-RegistryValue -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent" -Name "DisableSoftLanding" -Value 1 -PropertyType DWord
+Ensure-RegistryValue -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent" -Name "DisableWindowsSpotlightFeatures" -Value 1 -PropertyType DWord
+Ensure-RegistryValue -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo" -Name "DisabledByGroupPolicy" -Value 1 -PropertyType DWord
+Ensure-RegistryValue -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot" -Name "TurnOffWindowsCopilot" -Value 1 -PropertyType DWord
+Write-Host "Windows consumer features blocked"
+
+# Disable common startup apps for current user
+$startupRegistryPaths = @(
+    "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run",
+    "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run"
+)
+
+$startupAppPatterns = @(
+    "Teams",
+    "Spotify",
+    "OneDrive",
+    "Copilot"
+)
+
+foreach ($registryPath in $startupRegistryPaths) {
+    if (Test-Path $registryPath) {
+        $startupValues = Get-ItemProperty -Path $registryPath
+        foreach ($property in $startupValues.PSObject.Properties) {
+            if ($property.Name -in @('PSPath','PSParentPath','PSChildName','PSDrive','PSProvider')) {
+                continue
+            }
+
+            foreach ($pattern in $startupAppPatterns) {
+                if ($property.Name -like "*$pattern*" -or [string]$property.Value -like "*$pattern*") {
+                    try {
+                        Remove-ItemProperty -Path $registryPath -Name $property.Name -ErrorAction Stop
+                        Write-Host "Startup entry removed: $($property.Name)"
+                    }
+                    catch {
+                        Write-Host "Unable to remove startup entry $($property.Name): $($_.Exception.Message)"
+                    }
+                    break
+                }
+            }
+        }
+    }
+}
+
+$startupFolders = @(
+    "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup",
+    "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp"
+)
+
+foreach ($startupFolder in $startupFolders) {
+    if (Test-Path $startupFolder) {
+        Get-ChildItem -Path $startupFolder -File -ErrorAction SilentlyContinue | ForEach-Object {
+            foreach ($pattern in $startupAppPatterns) {
+                if ($_.Name -like "*$pattern*") {
+                    try {
+                        Remove-Item -Path $_.FullName -Force -ErrorAction Stop
+                        Write-Host "Startup shortcut removed: $($_.Name)"
+                    }
+                    catch {
+                        Write-Host "Unable to remove startup shortcut $($_.Name): $($_.Exception.Message)"
+                    }
+                    break
+                }
+            }
+        }
+    }
+}
+
+Write-Host "Startup apps cleanup complete"
+
 Write-Step "Language configuration"
 
 $capabilitiesToInstall = @(
@@ -341,6 +413,12 @@ Ensure-RegistryValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Expl
 
 Write-Host "Tactile keyboard set"
 
+Write-Step "Final cleanup"
+Write-Host "Cleaning temp files..."
+Remove-Item -Path "$env:TEMP\*" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "C:\Windows\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
+Write-Host "Final cleanup complete"
+
 Write-Step "Restarting Explorer"
 try {
     Stop-Process -Name StartMenuExperienceHost -Force -ErrorAction SilentlyContinue
@@ -362,5 +440,8 @@ Write-Host "Language set to en-US"
 Write-Host "OPS copied to C:\"
 Write-Host "Touch keyboard configured"
 Write-Host "OneDrive removed"
+Write-Host "Windows consumer features blocked"
+Write-Host "Startup apps cleaned"
+Write-Host "Final cleanup done"
 Write-Host "Microsoft Store removal toggle available"
 Write-Host "Recommended hidden; pinned section handling applied when supported by Windows 11 build"
