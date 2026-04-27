@@ -68,12 +68,27 @@ function Set-StaticIPv4 {
         return
     }
 
+    $existing = Get-NetIPAddress -InterfaceAlias $InterfaceName -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object { $_.IPAddress -eq $IPv4 }
+
+    if ($existing) {
+        Write-Host "IP already configured on $InterfaceName"
+        return
+    }
+
     Write-Host "Setting IP on $InterfaceName"
 
     if ([string]::IsNullOrWhiteSpace($DefaultGateway)) {
-        $args = @("interface","ipv4","set","address","name=$InterfaceName","static",$IPv4,$SubnetMask,"none")
-    } else {
-        $args = @("interface","ipv4","set","address","name=$InterfaceName","static",$IPv4,$SubnetMask,$DefaultGateway)
+        $args = @(
+            "interface", "ipv4", "set", "address",
+            "name=$InterfaceName", "static", $IPv4, $SubnetMask, "none"
+        )
+    }
+    else {
+        $args = @(
+            "interface", "ipv4", "set", "address",
+            "name=$InterfaceName", "static", $IPv4, $SubnetMask, $DefaultGateway
+        )
     }
 
     $result = & netsh @args 2>&1
@@ -82,7 +97,7 @@ function Set-StaticIPv4 {
         throw "netsh error: $result"
     }
 
-    Write-Host "Configured: $InterfaceName -> $IPv4"
+    Write-Host "Configured: $InterfaceName -> $IPv4 / $SubnetMask"
 }
 
 function Set-NetworkAdapterProfile {
@@ -96,8 +111,17 @@ function Set-NetworkAdapterProfile {
 
     Write-Step "Configuring $NewName"
 
-    $adapter = Rename-AdapterIfNeeded -PossibleCurrentNames $PossibleCurrentNames -NewName $NewName
+    $adapter = Rename-AdapterIfNeeded `
+        -PossibleCurrentNames $PossibleCurrentNames `
+        -NewName $NewName
+
     if (-not $adapter) { return }
+
+    if ($IPv4 -eq "DHCP") {
+        Write-Host "Setting DHCP on $NewName"
+        & netsh interface ipv4 set address name="$NewName" source=dhcp | Out-Null
+        return
+    }
 
     Set-StaticIPv4 `
         -InterfaceName $NewName `
@@ -115,17 +139,18 @@ if (-not (Test-IsAdmin)) {
 
 $networkProfiles = @(
     @{
-        PossibleCurrentNames = @("Ethernet","IntelliTrax")
+        PossibleCurrentNames = @("Ethernet", "IntelliTrax")
         NewName              = "IntelliTrax"
         IPv4                 = "172.16.1.15"
         SubnetMask           = "255.255.0.0"
     },
     @{
-        PossibleCurrentNames = @("Ethernet 2","Network")
+        PossibleCurrentNames = @("Ethernet 2", "Network")
         NewName              = "Network"
+        IPv4                 = "DHCP"
     },
     @{
-        PossibleCurrentNames = @("Ethernet 3","PUPI")
+        PossibleCurrentNames = @("Ethernet 3", "Ethernet 4", "PUPI")
         NewName              = "PUPI"
         IPv4                 = "10.10.6.15"
         SubnetMask           = "255.255.255.0"
@@ -135,7 +160,7 @@ $networkProfiles = @(
 # ===== DEBUG =====
 
 Write-Step "Adapters detected"
-Get-NetAdapter | Format-Table -AutoSize Name, InterfaceDescription, Status
+Get-NetAdapter | Format-Table -AutoSize Name, InterfaceDescription, Status, MacAddress, LinkSpeed
 
 Write-Step "Starting config"
 
@@ -144,12 +169,12 @@ foreach ($profile in $networkProfiles) {
         Set-NetworkAdapterProfile @profile
     }
     catch {
-        Write-Host "ERROR: $($_.Exception.Message)"
+        Write-Host "ERROR while configuring $($profile.NewName): $($_.Exception.Message)"
     }
 }
 
 Write-Step "Final result"
-Get-NetAdapter | Format-Table -AutoSize Name, Status, LinkSpeed
+Get-NetAdapter | Format-Table -AutoSize Name, InterfaceDescription, Status, MacAddress, LinkSpeed
 
-Write-Host "`nIP configuration:"
-Get-NetIPConfiguration | Format-List InterfaceAlias, IPv4Address, IPv4DefaultGateway
+Write-Host "`n=== IP CONFIG ==="
+ipconfig /all

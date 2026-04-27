@@ -13,15 +13,15 @@ echo      Rutherford assistant launcher
 echo ======================================
 echo.
 echo Available commands:
-echo   setup   = run LaRoche.ps1
-echo   network = run Network.ps1 NE PAS UTILISER CE N'EST PAS FINI 
+echo   s   = setup / run LaRoche.ps1
+echo   n = network / run Network.ps1 NE PAS UTILISER CE N'EST PAS FINI 
 echo   exit    = quit
 
 echo.
-set /p userChoice=Enter command (setup/network/exit): 
+set /p userChoice=Enter command (s/n/exit): 
 
-if /I "%userChoice%"=="setup" goto elevate_setup
-if /I "%userChoice%"=="network" goto elevate_network
+if /I "%userChoice%"=="s" goto elevate_setup
+if /I "%userChoice%"=="n" goto elevate_network
 if /I "%userChoice%"=="exit" goto end
 
 echo.
