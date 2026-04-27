@@ -14,7 +14,9 @@ function Test-IsAdmin {
 }
 
 function Convert-MaskToPrefixLength {
-    param([Parameter(Mandatory=$true)][string]$SubnetMask)
+    param([string]$SubnetMask)
+
+    if ([string]::IsNullOrWhiteSpace($SubnetMask)) { return $null }
 
     $octets = $SubnetMask.Split('.')
     if ($octets.Count -ne 4) {
@@ -42,10 +44,10 @@ function Convert-MaskToPrefixLength {
 
 function Set-NetworkAdapterProfile {
     param(
-        [Parameter(Mandatory=$true)][string]$CurrentName,
-        [Parameter(Mandatory=$true)][string]$NewName,
-        [Parameter(Mandatory=$true)][string]$IPv4,
-        [Parameter(Mandatory=$true)][string]$SubnetMask,
+        [string]$CurrentName,
+        [string]$NewName,
+        [string]$IPv4 = "",
+        [string]$SubnetMask = "",
         [string]$DefaultGateway = ""
     )
 
@@ -53,7 +55,8 @@ function Set-NetworkAdapterProfile {
 
     $adapter = Get-NetAdapter -Name $CurrentName -ErrorAction SilentlyContinue
     if (-not $adapter) {
-        throw "Network adapter not found: $CurrentName"
+        Write-Host "Adapter not found: $CurrentName"
+        return
     }
 
     if ($CurrentName -ne $NewName) {
@@ -61,28 +64,33 @@ function Set-NetworkAdapterProfile {
         Start-Sleep -Seconds 2
     }
 
-    $prefixLength = Convert-MaskToPrefixLength -SubnetMask $SubnetMask
+    if (-not [string]::IsNullOrWhiteSpace($IPv4) -and -not [string]::IsNullOrWhiteSpace($SubnetMask)) {
+        $prefixLength = Convert-MaskToPrefixLength -SubnetMask $SubnetMask
 
-    Get-NetIPAddress -InterfaceAlias $NewName -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-        Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
+        Get-NetIPAddress -InterfaceAlias $NewName -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
 
-    Get-NetRoute -InterfaceAlias $NewName -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-        Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+        Get-NetRoute -InterfaceAlias $NewName -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
 
-    $ipParams = @{
-        InterfaceAlias = $NewName
-        IPAddress      = $IPv4
-        PrefixLength   = $prefixLength
-        AddressFamily  = "IPv4"
+        $ipParams = @{
+            InterfaceAlias = $NewName
+            IPAddress      = $IPv4
+            PrefixLength   = $prefixLength
+            AddressFamily  = "IPv4"
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($DefaultGateway)) {
+            $ipParams.DefaultGateway = $DefaultGateway
+        }
+
+        New-NetIPAddress @ipParams -ErrorAction Stop | Out-Null
+
+        Write-Host "Configured: $NewName | IP: $IPv4 | Mask: $SubnetMask"
     }
-
-    if (-not [string]::IsNullOrWhiteSpace($DefaultGateway)) {
-        $ipParams.DefaultGateway = $DefaultGateway
+    else {
+        Write-Host "Renamed only: $NewName"
     }
-
-    New-NetIPAddress @ipParams -ErrorAction Stop | Out-Null
-
-    Write-Host "Adapter configured: $NewName | IP: $IPv4 | Mask: $SubnetMask"
 }
 
 if (-not (Test-IsAdmin)) {
@@ -90,54 +98,33 @@ if (-not (Test-IsAdmin)) {
     exit 1
 }
 
-# =====================================================================
-# TEMPLATE A REMPLIR
-# Remplace les valeurs ci-dessous quand tu auras les vraies infos.
-# =====================================================================
-
 $networkProfiles = @(
     @{
-        CurrentName    = "Ethernet"
-        NewName        = "PORT-1"
-        IPv4           = "192.168.1.10"
-        SubnetMask     = "255.255.255.0"
-        DefaultGateway = ""
+        CurrentName = "Ethernet"
+        NewName     = "IntelliTrax"
+        IPv4        = "172.16.1.15"
+        SubnetMask  = "255.255.0.0"
     },
     @{
-        CurrentName    = "Ethernet 2"
-        NewName        = "PORT-2"
-        IPv4           = "192.168.1.11"
-        SubnetMask     = "255.255.255.0"
-        DefaultGateway = ""
+        CurrentName = "Ethernet 2"
+        NewName     = "Network"
+    },
+    @{
+        CurrentName = "Ethernet 3"
+        NewName     = "PUPI"
+        IPv4        = "10.10.6.15"
+        SubnetMask  = "255.255.255.0"
     }
 )
 
 Write-Step "Starting network configuration"
 
 foreach ($profile in $networkProfiles) {
-    Set-NetworkAdapterProfile `
-        -CurrentName $profile.CurrentName `
-        -NewName $profile.NewName `
-        -IPv4 $profile.IPv4 `
-        -SubnetMask $profile.SubnetMask `
-        -DefaultGateway $profile.DefaultGateway
+    Set-NetworkAdapterProfile @profile
 }
-
-Write-Step "Summary"
-Write-Host "Network adapters configured successfully."
-Write-Host "Check adapter names with: Get-NetAdapter"
 
 Write-Step "Network adapters summary"
+Get-NetAdapter | Format-Table -AutoSize Name, Status, MacAddress, LinkSpeed
 
-Get-NetAdapter | Format-Table -AutoSize Name, InterfaceDescription, Status, MacAddress, LinkSpeed
-
-Write-Host ""
-Write-Host "IPv4 configuration:"
-Get-NetIPConfiguration | Format-List InterfaceAlias, InterfaceDescription, IPv4Address, IPv4DefaultGateway, DNSServer
-
-Write-Host ""
-Write-Host "Detailed adapter info:"
-Get-NetAdapter | ForEach-Object {
-    Write-Host "----------------------------------------"
-    Get-NetIPAddress -InterfaceAlias $_.Name -AddressFamily IPv4 -ErrorAction SilentlyContinue | Format-Table -AutoSize InterfaceAlias, IPAddress, PrefixLength
-}
+Write-Host "`nIPv4 configuration:"
+Get-NetIPConfiguration | Format-List InterfaceAlias, IPv4Address, IPv4DefaultGateway, DNSServer
