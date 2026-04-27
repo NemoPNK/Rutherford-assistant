@@ -26,6 +26,26 @@ function Get-AdapterByNameList {
     return $null
 }
 
+function Wait-AdapterReady {
+    param(
+        [string]$Name,
+        [int]$TimeoutSeconds = 20
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+
+    do {
+        $adapter = Get-NetAdapter -Name $Name -ErrorAction SilentlyContinue
+        if ($adapter) {
+            return $adapter
+        }
+
+        Start-Sleep -Seconds 1
+    } while ((Get-Date) -lt $deadline)
+
+    throw "Adapter $Name was not ready after $TimeoutSeconds seconds."
+}
+
 function Rename-AdapterIfNeeded {
     param(
         [string[]]$PossibleCurrentNames,
@@ -50,9 +70,18 @@ function Rename-AdapterIfNeeded {
     }
 
     Rename-NetAdapter -Name $adapter.Name -NewName $NewName -ErrorAction Stop
-    Start-Sleep -Seconds 2
+    Start-Sleep -Seconds 3
 
-    return Get-NetAdapter -Name $NewName -ErrorAction Stop
+    $renamedAdapter = Wait-AdapterReady -Name $NewName -TimeoutSeconds 20
+
+    # Restart the adapter after rename because Windows sometimes keeps IPv4/DHCP state unstable
+    # during the first run, especially with USB Ethernet adapters.
+    Disable-NetAdapter -Name $NewName -Confirm:$false -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    Enable-NetAdapter -Name $NewName -Confirm:$false -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 5
+
+    return Wait-AdapterReady -Name $NewName -TimeoutSeconds 20
 }
 
 function Set-StaticIPv4 {
@@ -68,8 +97,12 @@ function Set-StaticIPv4 {
         return
     }
 
-    $existing = Get-NetIPAddress -InterfaceAlias $InterfaceName -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-        Where-Object { $_.IPAddress -eq $IPv4 }
+    Wait-AdapterReady -Name $InterfaceName -TimeoutSeconds 20 | Out-Null
+
+    $currentIPv4 = Get-NetIPAddress -InterfaceAlias $InterfaceName -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object { $_.IPAddress -notlike "169.254.*" }
+
+    $existing = $currentIPv4 | Where-Object { $_.IPAddress -eq $IPv4 }
 
     if ($existing) {
         Write-Host "IP already configured on $InterfaceName"
@@ -78,23 +111,24 @@ function Set-StaticIPv4 {
 
     Write-Host "Setting IP on $InterfaceName"
 
-    if ([string]::IsNullOrWhiteSpace($DefaultGateway)) {
-        $args = @(
-            "interface", "ipv4", "set", "address",
-            "name=$InterfaceName", "static", $IPv4, $SubnetMask, "none"
-        )
-    }
-    else {
-        $args = @(
-            "interface", "ipv4", "set", "address",
-            "name=$InterfaceName", "static", $IPv4, $SubnetMask, $DefaultGateway
-        )
+    # Force adapter into static mode before applying the address.
+    # This avoids the first-run bug where Windows keeps DHCP active right after rename.
+    & netsh interface ipv4 set address name="$InterfaceName" source=static addr=$IPv4 mask=$SubnetMask gateway=none | Out-Null
+    Start-Sleep -Seconds 2
+
+    if (-not [string]::IsNullOrWhiteSpace($DefaultGateway)) {
+        $result = & netsh interface ipv4 set address name="$InterfaceName" static $IPv4 $SubnetMask $DefaultGateway 2>&1
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "netsh error: $result"
+        }
     }
 
-    $result = & netsh @args 2>&1
+    $finalIPv4 = Get-NetIPAddress -InterfaceAlias $InterfaceName -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object { $_.IPAddress -eq $IPv4 }
 
-    if ($LASTEXITCODE -ne 0) {
-        throw "netsh error: $result"
+    if (-not $finalIPv4) {
+        throw "IPv4 was not applied on $InterfaceName. Expected $IPv4"
     }
 
     Write-Host "Configured: $InterfaceName -> $IPv4 / $SubnetMask"
@@ -118,8 +152,10 @@ function Set-NetworkAdapterProfile {
     if (-not $adapter) { return }
 
     if ($IPv4 -eq "DHCP") {
+        Wait-AdapterReady -Name $NewName -TimeoutSeconds 20 | Out-Null
         Write-Host "Setting DHCP on $NewName"
         & netsh interface ipv4 set address name="$NewName" source=dhcp | Out-Null
+        Start-Sleep -Seconds 2
         return
     }
 
@@ -150,7 +186,7 @@ $networkProfiles = @(
         IPv4                 = "DHCP"
     },
     @{
-        PossibleCurrentNames = @("Ethernet 3", "Ethernet 4", "PUPI")
+        PossibleCurrentNames = @("Ethernet 3", "Ethernet 4", "Ethernet 5", "PUPI")
         NewName              = "PUPI"
         IPv4                 = "10.10.6.15"
         SubnetMask           = "255.255.255.0"
