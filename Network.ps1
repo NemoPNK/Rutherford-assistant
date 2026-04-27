@@ -1,4 +1,5 @@
 Write-Host "Network configuration script"
+Write-Host "Please be patient, this can take some time while Windows applies network changes."
 
 $ErrorActionPreference = "Stop"
 
@@ -72,16 +73,8 @@ function Rename-AdapterIfNeeded {
     Rename-NetAdapter -Name $adapter.Name -NewName $NewName -ErrorAction Stop
     Start-Sleep -Seconds 3
 
-    $renamedAdapter = Wait-AdapterReady -Name $NewName -TimeoutSeconds 20
-
-    # Restart the adapter after rename because Windows sometimes keeps IPv4/DHCP state unstable
-    # during the first run, especially with USB Ethernet adapters.
-    Disable-NetAdapter -Name $NewName -Confirm:$false -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
-    Enable-NetAdapter -Name $NewName -Confirm:$false -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 5
-
-    return Wait-AdapterReady -Name $NewName -TimeoutSeconds 20
+    return Wait-AdapterReady -Name $NewName -TimeoutSeconds 10
 }
 
 function Set-StaticIPv4 {
@@ -113,6 +106,7 @@ function Set-StaticIPv4 {
 
     # Force adapter into static mode before applying the address.
     # This avoids the first-run bug where Windows keeps DHCP active right after rename.
+    Write-Host "Applying static IPv4 configuration, please wait..."
     & netsh interface ipv4 set address name="$InterfaceName" source=static addr=$IPv4 mask=$SubnetMask gateway=none | Out-Null
     Start-Sleep -Seconds 2
 
@@ -152,10 +146,7 @@ function Set-NetworkAdapterProfile {
     if (-not $adapter) { return }
 
     if ($IPv4 -eq "DHCP") {
-        Wait-AdapterReady -Name $NewName -TimeoutSeconds 20 | Out-Null
-        Write-Host "Setting DHCP on $NewName"
-        & netsh interface ipv4 set address name="$NewName" source=dhcp | Out-Null
-        Start-Sleep -Seconds 2
+        Write-Host "$NewName stays in DHCP automatic mode."
         return
     }
 
@@ -186,7 +177,7 @@ $networkProfiles = @(
         IPv4                 = "DHCP"
     },
     @{
-        PossibleCurrentNames = @("Ethernet 3", "Ethernet 4", "Ethernet 5", "PUPI")
+        PossibleCurrentNames = @("Ethernet 3", "PUPI")
         NewName              = "PUPI"
         IPv4                 = "10.10.6.15"
         SubnetMask           = "255.255.255.0"
