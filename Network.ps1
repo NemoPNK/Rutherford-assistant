@@ -42,6 +42,21 @@ function Convert-MaskToPrefixLength {
     return $prefixLength
 }
 
+function Get-AdapterByCurrentOrNewName {
+    param(
+        [string]$CurrentName,
+        [string]$NewName
+    )
+
+    $adapter = Get-NetAdapter -Name $CurrentName -ErrorAction SilentlyContinue
+    if ($adapter) { return $adapter }
+
+    $adapter = Get-NetAdapter -Name $NewName -ErrorAction SilentlyContinue
+    if ($adapter) { return $adapter }
+
+    return $null
+}
+
 function Set-NetworkAdapterProfile {
     param(
         [string]$CurrentName,
@@ -51,26 +66,38 @@ function Set-NetworkAdapterProfile {
         [string]$DefaultGateway = ""
     )
 
-    Write-Step "Configuring adapter $CurrentName"
+    Write-Step "Configuring adapter $CurrentName -> $NewName"
 
-    $adapter = Get-NetAdapter -Name $CurrentName -ErrorAction SilentlyContinue
+    $adapter = Get-AdapterByCurrentOrNewName -CurrentName $CurrentName -NewName $NewName
     if (-not $adapter) {
-        Write-Host "Adapter not found: $CurrentName"
+        Write-Host "Adapter not found: $CurrentName or $NewName"
         return
     }
 
-    if ($CurrentName -ne $NewName) {
-        Rename-NetAdapter -Name $CurrentName -NewName $NewName -ErrorAction Stop
+    if ($adapter.Name -ne $NewName) {
+        $existingNewName = Get-NetAdapter -Name $NewName -ErrorAction SilentlyContinue
+        if ($existingNewName) {
+            throw "Cannot rename $($adapter.Name) to $NewName because another adapter already uses this name."
+        }
+
+        Rename-NetAdapter -Name $adapter.Name -NewName $NewName -ErrorAction Stop
         Start-Sleep -Seconds 2
     }
 
     if (-not [string]::IsNullOrWhiteSpace($IPv4) -and -not [string]::IsNullOrWhiteSpace($SubnetMask)) {
         $prefixLength = Convert-MaskToPrefixLength -SubnetMask $SubnetMask
 
+        # New-NetIPAddress fails if DHCP is still enabled on the interface.
+        # Disable DHCP first, then clean existing IPv4 addresses/routes.
+        Set-NetIPInterface -InterfaceAlias $NewName -AddressFamily IPv4 -Dhcp Disabled -ErrorAction Stop
+        Start-Sleep -Seconds 1
+
         Get-NetIPAddress -InterfaceAlias $NewName -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object { $_.IPAddress -ne "127.0.0.1" } |
             Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
 
         Get-NetRoute -InterfaceAlias $NewName -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object { $_.DestinationPrefix -eq "0.0.0.0/0" } |
             Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
 
         $ipParams = @{
