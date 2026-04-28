@@ -1,0 +1,40 @@
+name: Build Rutherford EXE
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "LaRocheLauncher.bat"
+      - "assets/**"
+      - "scripts/build-exe.ps1"
+      - ".github/workflows/build-exe.yml"
+
+jobs:
+  build-windows-exe:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup PowerShell Gallery trust
+        shell: powershell
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+
+      - name: Build EXE package
+        shell: powershell
+        run: |
+          powershell -ExecutionPolicy Bypass -File .\scripts\build-exe.ps1
+
+      - name: Upload portable package
+        uses: actions/upload-artifact@v4
+        with:
+          name: RutherfordAssistant-portable
+          path: |
+            dist\package\RutherfordAssistant.exe
+            dist\package\LaRocheLauncher.bat
+            dist\package\assets
+            dist\RutherfordAssistant-portable.zip
