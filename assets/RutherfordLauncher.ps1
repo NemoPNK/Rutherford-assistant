@@ -1,6 +1,56 @@
+# ----------------------------------------------------------------------------
+# Bootstrap crash log - MUST be the very first code so we capture even
+# startup errors. Tries multiple paths and picks the first writable one.
+# ----------------------------------------------------------------------------
+
+$script:CrashLogPath = $null
+
+function Try-WriteLog {
+    param([string]$Path)
+    try {
+        $dir = Split-Path -Parent $Path
+        if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+            New-Item -Path $dir -ItemType Directory -Force -ErrorAction Stop | Out-Null
+        }
+        [System.IO.File]::AppendAllText($Path, "")
+        return $true
+    } catch { return $false }
+}
+
+# Build candidate list: next to EXE first (most findable), then standard places
+$_logCandidates = @()
+try {
+    $_exePath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    if ($_exePath) { $_logCandidates += (Join-Path (Split-Path -Parent $_exePath) "RutherfordAssistant.log") }
+} catch { }
+if ($PSCommandPath) {
+    $_logCandidates += (Join-Path (Split-Path -Parent $PSCommandPath) "RutherfordAssistant.log")
+}
+$_logCandidates += "C:\ProgramData\Rutherford\launcher.log"
+$_logCandidates += (Join-Path $env:TEMP "RutherfordAssistant.log")
+$_logCandidates += (Join-Path $env:USERPROFILE "RutherfordAssistant.log")
+
+foreach ($_cand in $_logCandidates) {
+    if ([string]::IsNullOrWhiteSpace($_cand)) { continue }
+    if (Try-WriteLog $_cand) { $script:CrashLogPath = $_cand; break }
+}
+
+function Write-CrashLog {
+    param([string]$Message)
+    if (-not $script:CrashLogPath) { return }
+    try {
+        $stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"
+        [System.IO.File]::AppendAllText($script:CrashLogPath, ("[$stamp] " + $Message + "`r`n"))
+    } catch { }
+}
+
+Write-CrashLog "===== Launcher boot ====="
+Write-CrashLog ("CrashLogPath = " + $script:CrashLogPath)
+
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName WindowsBase
+Write-CrashLog "WPF assemblies loaded"
 
 # ----------------------------------------------------------------------------
 # Path resolution
@@ -161,36 +211,6 @@ function Ensure-Elevated {
     Start-Process -FilePath "powershell.exe" -ArgumentList $argumentList -Verb RunAs | Out-Null
     exit
 }
-
-# ----------------------------------------------------------------------------
-# File-based crash log. Survives launcher death, lets us see the LAST
-# operation attempted before any crash. Written to:
-#   C:\ProgramData\Rutherford\launcher.log
-# ----------------------------------------------------------------------------
-
-$script:CrashLogPath = $null
-try {
-    $logRoot = "C:\ProgramData\Rutherford"
-    if (-not (Test-Path -LiteralPath $logRoot)) {
-        New-Item -Path $logRoot -ItemType Directory -Force | Out-Null
-    }
-    $script:CrashLogPath = Join-Path $logRoot "launcher.log"
-}
-catch { $script:CrashLogPath = $null }
-
-function Write-CrashLog {
-    param([string]$Message)
-    if (-not $script:CrashLogPath) { return }
-    try {
-        $stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"
-        $line  = "[$stamp] $Message"
-        # Use .NET to append - flushes immediately, no PowerShell pipeline buffering
-        [System.IO.File]::AppendAllText($script:CrashLogPath, ($line + "`r`n"))
-    }
-    catch { }
-}
-
-Write-CrashLog "===== Launcher boot ====="
 
 # ----------------------------------------------------------------------------
 # Persistent state
@@ -600,12 +620,6 @@ $script:AuditChecks = Discover-AuditChecks
                                 TextElement.FontSize="{TemplateBinding FontSize}" />
             </Border>
             <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="ButtonBorder" Property="Opacity" Value="0.9" />
-              </Trigger>
-              <Trigger Property="IsPressed" Value="True">
-                <Setter TargetName="ButtonBorder" Property="Opacity" Value="0.78" />
-              </Trigger>
               <Trigger Property="IsEnabled" Value="False">
                 <Setter TargetName="ButtonBorder" Property="Opacity" Value="0.5" />
               </Trigger>
@@ -944,6 +958,8 @@ $window.Dispatcher.add_UnhandledException({
     param($sender, $eventArgs)
     try {
         $msg = "Unhandled UI exception: " + $eventArgs.Exception.Message
+        Write-CrashLog $msg
+        Write-CrashLog ("Stack: " + $eventArgs.Exception.StackTrace)
         if ($script:LogItems) { $script:LogItems.Add(("[{0}] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $msg)) | Out-Null }
     }
     catch { }
@@ -956,6 +972,7 @@ $window.Dispatcher.add_UnhandledException({
     try {
         $ex = $eventArgs.ExceptionObject
         $msg = if ($ex) { "$ex" } else { "unknown" }
+        Write-CrashLog ("AppDomain unhandled: " + $msg)
         if ($script:LogItems) { $script:LogItems.Add(("[{0}] AppDomain error: {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $msg)) | Out-Null }
     }
     catch { }
@@ -1147,10 +1164,12 @@ function Build-ActionButtons {
 
         $button.Add_Click({
             param($sender, $e)
+            Write-CrashLog "----- Click handler entered -----"
             $clickedKey = ""
 
             # Try Tag first
-            try { $clickedKey = [string]$sender.Tag } catch { }
+            try { $clickedKey = [string]$sender.Tag } catch { Write-CrashLog "Tag read failed" }
+            Write-CrashLog ("After Tag try, clickedKey='" + $clickedKey + "', sender type=" + ($(if ($sender) { $sender.GetType().Name } else { "null" })))
 
             # Fallback: dictionary lookup by button reference
             if ([string]::IsNullOrWhiteSpace($clickedKey)) {
@@ -1848,6 +1867,7 @@ $openReportButton.Add_Click({
 
 $window.Add_Closing({
     param($sender, $eventArgs)
+    Write-CrashLog "Window.Closing event fired"
 
     if ($script:IsBusy -and $script:CurrentProcess -and -not $script:CurrentProcess.HasExited) {
         $result = [System.Windows.MessageBox]::Show(
@@ -1859,8 +1879,16 @@ $window.Add_Closing({
 
         if ($result -ne [System.Windows.MessageBoxResult]::Yes) {
             $eventArgs.Cancel = $true
+            Write-CrashLog "Window.Closing cancelled by user"
+        }
+        else {
+            Write-CrashLog "Window.Closing confirmed by user"
         }
     }
+})
+
+$window.Add_Closed({
+    Write-CrashLog "Window.Closed event fired (window destroyed)"
 })
 
 # ----------------------------------------------------------------------------
