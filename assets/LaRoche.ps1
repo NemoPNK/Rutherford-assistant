@@ -175,8 +175,16 @@ powercfg /hibernate off
 
 # Wallpaper
 $wallpaperPath = Join-Path $PSScriptRoot "wallpaper.jpg"
+$localWallpaperDirectory = "C:\ProgramData\Rutherford"
+$localWallpaperPath = Join-Path $localWallpaperDirectory "wallpaper.jpg"
 
 if (Test-Path $wallpaperPath) {
+    if (-not (Test-Path $localWallpaperDirectory)) {
+        New-Item -Path $localWallpaperDirectory -ItemType Directory -Force | Out-Null
+    }
+
+    Copy-Item -Path $wallpaperPath -Destination $localWallpaperPath -Force
+    Write-Host "Wallpaper copied to $localWallpaperPath"
 
     Add-Type @"
 using System.Runtime.InteropServices;
@@ -186,7 +194,11 @@ public class Wallpaper {
 }
 "@
 
-    [Wallpaper]::SystemParametersInfo(20, 0, $wallpaperPath, 0x1 -bor 0x2)
+    Set-ItemProperty -Path "HKCU:\Control Panel\Desktop" -Name Wallpaper -Value $localWallpaperPath
+    Set-ItemProperty -Path "HKCU:\Control Panel\Desktop" -Name WallpaperStyle -Value "10"
+    Set-ItemProperty -Path "HKCU:\Control Panel\Desktop" -Name TileWallpaper -Value "0"
+
+    [Wallpaper]::SystemParametersInfo(20, 0, $localWallpaperPath, 0x1 -bor 0x2) | Out-Null
 
     Write-Host "Wallpaper set"
 }

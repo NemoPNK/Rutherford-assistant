@@ -14,6 +14,38 @@ function Test-IsAdmin {
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+function Get-NetworkProfiles {
+    $configPath = Join-Path $PSScriptRoot "config\network-profiles.json"
+
+    if (Test-Path $configPath) {
+        Write-Host "Loading network config from $configPath"
+        return @(Get-Content -Path $configPath -Raw -Encoding UTF8 | ConvertFrom-Json)
+    }
+
+    Write-Host "Network config not found, using embedded fallback."
+    return @(
+        [pscustomobject]@{
+            PossibleCurrentNames = @("Ethernet", "IntelliTrax")
+            NewName              = "IntelliTrax"
+            Mode                 = "static"
+            IPv4                 = "172.16.1.15"
+            SubnetMask           = "255.255.0.0"
+        },
+        [pscustomobject]@{
+            PossibleCurrentNames = @("Ethernet 2", "Network")
+            NewName              = "Network"
+            Mode                 = "dhcp"
+        },
+        [pscustomobject]@{
+            PossibleCurrentNames = @("Ethernet 3", "PUPI")
+            NewName              = "PUPI"
+            Mode                 = "static"
+            IPv4                 = "10.10.6.15"
+            SubnetMask           = "255.255.255.0"
+        }
+    )
+}
+
 function Get-AdapterByNameList {
     param([string[]]$Names)
 
@@ -162,27 +194,7 @@ if (-not (Test-IsAdmin)) {
     exit 1
 }
 
-# ===== CONFIG =====
-
-$networkProfiles = @(
-    @{
-        PossibleCurrentNames = @("Ethernet", "IntelliTrax")
-        NewName              = "IntelliTrax"
-        IPv4                 = "172.16.1.15"
-        SubnetMask           = "255.255.0.0"
-    },
-    @{
-        PossibleCurrentNames = @("Ethernet 2", "Network")
-        NewName              = "Network"
-        IPv4                 = "DHCP"
-    },
-    @{
-        PossibleCurrentNames = @("Ethernet 3", "PUPI")
-        NewName              = "PUPI"
-        IPv4                 = "10.10.6.15"
-        SubnetMask           = "255.255.255.0"
-    }
-)
+$networkProfiles = Get-NetworkProfiles
 
 # ===== DEBUG =====
 
@@ -193,7 +205,14 @@ Write-Step "Starting config"
 
 foreach ($profile in $networkProfiles) {
     try {
-        Set-NetworkAdapterProfile @profile
+        $ipv4Mode = if ($profile.Mode -eq "dhcp") { "DHCP" } else { $profile.IPv4 }
+
+        Set-NetworkAdapterProfile `
+            -PossibleCurrentNames @($profile.PossibleCurrentNames) `
+            -NewName $profile.NewName `
+            -IPv4 $ipv4Mode `
+            -SubnetMask $profile.SubnetMask `
+            -DefaultGateway $profile.DefaultGateway
     }
     catch {
         Write-Host "ERROR while configuring $($profile.NewName): $($_.Exception.Message)"
