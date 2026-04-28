@@ -23,8 +23,8 @@ $assetsSource   = Join-Path $repoRoot "assets"
 $launcherSource = Join-Path $repoRoot "LaRocheLauncher.bat"
 $scriptSource   = Join-Path $assetsSource "RutherfordLauncher.ps1"
 $exeTarget      = Join-Path $packageRoot "RutherfordAssistant.exe"
-$zipTarget      = Join-Path $distRoot "RutherfordAssistant-portable.zip"
-$checksumTarget = Join-Path $distRoot "RutherfordAssistant-portable.sha256"
+$zipTarget      = Join-Path $distRoot "RutherfordAssistant.zip"
+$checksumTarget = Join-Path $distRoot "RutherfordAssistant.sha256"
 
 if (-not (Test-Path $scriptSource)) {
     throw "Missing launcher script: $scriptSource"
@@ -180,7 +180,7 @@ $zipHash = (Get-FileHash -Path $zipTarget -Algorithm SHA256).Hash
 $exeHash = (Get-FileHash -Path $exeTarget -Algorithm SHA256).Hash
 
 @(
-    "$zipHash  RutherfordAssistant-portable.zip"
+    "$zipHash  RutherfordAssistant.zip"
     "$exeHash  package/RutherfordAssistant.exe"
 ) | Set-Content -Path $checksumTarget -Encoding ASCII
 

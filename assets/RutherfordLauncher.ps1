@@ -77,6 +77,52 @@ $script:StateRoot          = "C:\ProgramData\Rutherford"
 $script:StateFilePath      = Join-Path $script:StateRoot "launcher-state.json"
 
 # ----------------------------------------------------------------------------
+# ColorLoop Design System palette
+# Source: ColorLoop logo colors extracted from the .fig design system
+# ----------------------------------------------------------------------------
+
+$script:Palette = @{
+    Red         = "#FD0902"
+    Yellow      = "#FDD800"
+    Green       = "#63B02F"
+    Blue        = "#1DB6FF"
+    Pink        = "#FCBBEB"
+    White       = "#FFFFFF"
+
+    # Surfaces / text
+    InkPrimary  = "#0A0A0A"
+    InkSoft     = "#52525B"
+    InkMuted    = "#A1A1AA"
+    Surface     = "#FFFFFF"
+    SurfaceDim  = "#F4F4F5"
+    Border      = "#E5E7EB"
+    HeroBg      = "#0F0F10"
+    HeroBorder  = "#232326"
+    HeroText    = "#F4F4F5"
+    HeroSoft    = "#B3B3BC"
+
+    # Status badges
+    OkBg        = "#DCFCE7"; OkFg = "#166534"
+    ErrorBg     = "#FEE2E2"; ErrorFg = "#B91C1C"
+    WarnBg      = "#FEF3C7"; WarnFg = "#92400E"
+    NeutralBg   = "#E5E7EB"; NeutralFg = "#374151"
+}
+
+function Get-ColorLoopAccent {
+    param([string]$Name)
+    switch ($Name) {
+        "red"     { return @{ Bg = $script:Palette.Red;    Fg = "#FFFFFF"; Hover = "#E10000" } }
+        "yellow"  { return @{ Bg = $script:Palette.Yellow; Fg = "#0A0A0A"; Hover = "#E6C400" } }
+        "green"   { return @{ Bg = $script:Palette.Green;  Fg = "#FFFFFF"; Hover = "#558E29" } }
+        "blue"    { return @{ Bg = $script:Palette.Blue;   Fg = "#FFFFFF"; Hover = "#0098DA" } }
+        "pink"    { return @{ Bg = $script:Palette.Pink;   Fg = "#0A0A0A"; Hover = "#F4A0DA" } }
+        "white"   { return @{ Bg = "#FFFFFF";              Fg = "#0A0A0A"; Hover = "#F4F4F5" } }
+        "dark"    { return @{ Bg = "#0A0A0A";              Fg = "#FFFFFF"; Hover = "#1F1F1F" } }
+        default   { return @{ Bg = $script:Palette.Green;  Fg = "#FFFFFF"; Hover = "#558E29" } }
+    }
+}
+
+# ----------------------------------------------------------------------------
 # Globals
 # ----------------------------------------------------------------------------
 
@@ -238,27 +284,63 @@ function Discover-Tasks {
 
 function Discover-AuditChecks {
     $checks = @()
-    if ([string]::IsNullOrWhiteSpace($script:ChecksRoot)) { return $checks }
-    if (-not (Test-Path -LiteralPath $script:ChecksRoot)) { return $checks }
+    $script:DiscoveryDiagnostics = @()
 
-    Get-ChildItem -Path $script:ChecksRoot -Filter "*.check.ps1" -File -ErrorAction SilentlyContinue |
-        Sort-Object Name |
-        ForEach-Object {
+    if ([string]::IsNullOrWhiteSpace($script:ChecksRoot)) {
+        $script:DiscoveryDiagnostics += "Discover-AuditChecks: ChecksRoot is empty"
+        return $checks
+    }
+    if (-not (Test-Path -LiteralPath $script:ChecksRoot)) {
+        $script:DiscoveryDiagnostics += "Discover-AuditChecks: ChecksRoot not found: $script:ChecksRoot"
+        return $checks
+    }
+
+    $files = @(Get-ChildItem -Path $script:ChecksRoot -Filter "*.check.ps1" -File -ErrorAction SilentlyContinue)
+    $script:DiscoveryDiagnostics += "Discover-AuditChecks: $($files.Count) file(s) in $script:ChecksRoot"
+
+    foreach ($file in ($files | Sort-Object Name)) {
+        try {
+            $content = $null
             try {
-                $check = & $_.FullName
-                if ($check -is [hashtable] -and $check.ContainsKey('Test')) {
-                    if (-not $check.ContainsKey('Order')) { $check.Order = 999 }
-                    if (-not $check.ContainsKey('Label')) { $check.Label = $_.BaseName }
-                    if (-not $check.ContainsKey('Category')) { $check.Category = "General" }
-                    $check.SourcePath = $_.FullName
-                    $checks += $check
-                }
+                $content = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 -ErrorAction Stop
             }
             catch {
-                # Bad check file, skip silently
+                $script:DiscoveryDiagnostics += "Read failed for $($file.Name): $($_.Exception.Message)"
+                continue
             }
-        }
 
+            if ([string]::IsNullOrWhiteSpace($content)) {
+                $script:DiscoveryDiagnostics += "Empty: $($file.Name)"
+                continue
+            }
+
+            # Use [scriptblock]::Create + & to capture the hashtable output reliably
+            # in both .ps1 and ps2exe-compiled .exe contexts.
+            $sb = [scriptblock]::Create($content)
+            $check = & $sb
+
+            if (-not ($check -is [hashtable])) {
+                $typeName = if ($null -eq $check) { "<null>" } else { $check.GetType().FullName }
+                $script:DiscoveryDiagnostics += "Not a hashtable: $($file.Name) (got $typeName)"
+                continue
+            }
+            if (-not $check.ContainsKey('Test')) {
+                $script:DiscoveryDiagnostics += "No 'Test' key: $($file.Name)"
+                continue
+            }
+
+            if (-not $check.ContainsKey('Order'))    { $check.Order    = 999 }
+            if (-not $check.ContainsKey('Label'))    { $check.Label    = $file.BaseName }
+            if (-not $check.ContainsKey('Category')) { $check.Category = "General" }
+            $check.SourcePath = $file.FullName
+            $checks += $check
+        }
+        catch {
+            $script:DiscoveryDiagnostics += "Error in $($file.Name): $($_.Exception.Message)"
+        }
+    }
+
+    $script:DiscoveryDiagnostics += "Discover-AuditChecks: $($checks.Count) check(s) loaded"
     return @($checks | Sort-Object @{Expression = { $_.Order }}, @{Expression = { $_.Label }})
 }
 
@@ -467,6 +549,50 @@ $script:AuditChecks = Discover-AuditChecks
         Background="#050505"
         Foreground="#F4F4F5"
         FontFamily="Segoe UI">
+  <Window.Resources>
+    <Style x:Key="RoundedButton" TargetType="Button">
+      <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="ButtonBorder"
+                    CornerRadius="18"
+                    Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    SnapsToDevicePixels="True">
+              <ContentPresenter HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                TextElement.Foreground="{TemplateBinding Foreground}"
+                                TextElement.FontWeight="{TemplateBinding FontWeight}"
+                                TextElement.FontSize="{TemplateBinding FontSize}" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="ButtonBorder" Property="Opacity" Value="0.9" />
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="ButtonBorder" Property="Opacity" Value="0.78" />
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="ButtonBorder" Property="Opacity" Value="0.5" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="RoundedSecondaryButton" TargetType="Button" BasedOn="{StaticResource RoundedButton}">
+      <Setter Property="Background" Value="#FFFFFF" />
+      <Setter Property="Foreground" Value="#0A0A0A" />
+      <Setter Property="BorderBrush" Value="#E5E7EB" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="FontWeight" Value="Bold" />
+      <Setter Property="Height" Value="42" />
+    </Style>
+  </Window.Resources>
   <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
     <Grid Margin="20">
       <Grid.RowDefinitions>
@@ -491,14 +617,15 @@ $script:AuditChecks = Discover-AuditChecks
 
           <StackPanel Grid.Column="0">
             <StackPanel Orientation="Horizontal">
-              <Ellipse Width="14" Height="14" Fill="#FF5A1F" Margin="0,0,8,0" />
-              <Ellipse Width="14" Height="14" Fill="#FFC83D" Margin="0,0,8,0" />
-              <Ellipse Width="14" Height="14" Fill="#39D0FF" Margin="0,0,8,0" />
-              <Ellipse Width="14" Height="14" Fill="#7C4DFF" />
+              <Ellipse Width="16" Height="16" Fill="#FD0902" Margin="0,0,10,0" />
+              <Ellipse Width="16" Height="16" Fill="#FDD800" Margin="0,0,10,0" />
+              <Ellipse Width="16" Height="16" Fill="#63B02F" Margin="0,0,10,0" />
+              <Ellipse Width="16" Height="16" Fill="#1DB6FF" Margin="0,0,10,0" />
+              <Ellipse Width="16" Height="16" Fill="#FCBBEB" />
             </StackPanel>
-            <TextBlock Margin="0,14,0,0"
+            <TextBlock Margin="0,16,0,0"
                        Text="Rutherford Assistant"
-                       FontSize="30"
+                       FontSize="32"
                        FontWeight="Bold" />
             <TextBlock Name="HeroSubtitle"
                        Margin="0,10,0,0"
@@ -554,44 +681,24 @@ $script:AuditChecks = Discover-AuditChecks
             <StackPanel Name="ActionsPanel" Margin="0,16,0,0" />
 
             <Button Name="OpenReportButton"
+                    Style="{StaticResource RoundedSecondaryButton}"
                     Margin="0,22,0,0"
-                    Height="40"
-                    FontWeight="Bold"
-                    Background="#FFFFFF"
-                    Foreground="#111111"
-                    BorderBrush="#E5E7EB"
-                    BorderThickness="1"
                     IsEnabled="False"
                     Content="Open Last Report" />
 
             <Button Name="RefreshNetworkButton"
+                    Style="{StaticResource RoundedSecondaryButton}"
                     Margin="0,10,0,0"
-                    Height="40"
-                    FontWeight="Bold"
-                    Background="#FFFFFF"
-                    Foreground="#111111"
-                    BorderBrush="#E5E7EB"
-                    BorderThickness="1"
                     Content="Refresh Network Status" />
 
             <Button Name="RefreshAuditButton"
+                    Style="{StaticResource RoundedSecondaryButton}"
                     Margin="0,10,0,0"
-                    Height="40"
-                    FontWeight="Bold"
-                    Background="#FFFFFF"
-                    Foreground="#111111"
-                    BorderBrush="#E5E7EB"
-                    BorderThickness="1"
                     Content="Refresh LaRoche Audit" />
 
             <Button Name="ClearLogsButton"
+                    Style="{StaticResource RoundedSecondaryButton}"
                     Margin="0,10,0,0"
-                    Height="40"
-                    FontWeight="Bold"
-                    Background="#FFFFFF"
-                    Foreground="#111111"
-                    BorderBrush="#E5E7EB"
-                    BorderThickness="1"
                     Content="Clear Logs" />
 
             <TextBlock Margin="0,24,0,0"
@@ -792,6 +899,29 @@ $script:AuditChecks = Discover-AuditChecks
 $reader = New-Object System.Xml.XmlNodeReader $xaml
 $window = [Windows.Markup.XamlReader]::Load($reader)
 
+# Global safety net: any unhandled exception on the UI dispatcher is logged
+# but MARKED HANDLED so WPF does not tear down the window.
+$window.Dispatcher.add_UnhandledException({
+    param($sender, $eventArgs)
+    try {
+        $msg = "Unhandled UI exception: " + $eventArgs.Exception.Message
+        if ($script:LogItems) { $script:LogItems.Add(("[{0}] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $msg)) | Out-Null }
+    }
+    catch { }
+    $eventArgs.Handled = $true
+})
+
+# Catch fully unhandled domain exceptions too (worker threads etc.)
+[AppDomain]::CurrentDomain.add_UnhandledException({
+    param($sender, $eventArgs)
+    try {
+        $ex = $eventArgs.ExceptionObject
+        $msg = if ($ex) { "$ex" } else { "unknown" }
+        if ($script:LogItems) { $script:LogItems.Add(("[{0}] AppDomain error: {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $msg)) | Out-Null }
+    }
+    catch { }
+})
+
 $actionsPanel        = $window.FindName("ActionsPanel")
 $openReportButton    = $window.FindName("OpenReportButton")
 $refreshNetworkButton = $window.FindName("RefreshNetworkButton")
@@ -917,7 +1047,7 @@ function Build-ActionButtons {
     $first = $true
     foreach ($task in $script:Tasks) {
         $row = New-Object System.Windows.Controls.Grid
-        if (-not $first) { $row.Margin = [System.Windows.Thickness]::new(0, 12, 0, 0) }
+        if (-not $first) { $row.Margin = [System.Windows.Thickness]::new(0, 14, 0, 0) }
 
         $colMain = New-Object System.Windows.Controls.ColumnDefinition
         [void]$row.ColumnDefinitions.Add($colMain)
@@ -925,31 +1055,36 @@ function Build-ActionButtons {
         $colStatus.Width = [System.Windows.GridLength]::new(120)
         [void]$row.ColumnDefinitions.Add($colStatus)
 
+        # ColorLoop accent button. Choose color via manifest field; default to green for primary, blue otherwise.
+        $colorName = if ($task.Color) { [string]$task.Color } elseif ($task.Primary) { "green" } else { "blue" }
+        $accent = Get-ColorLoopAccent -Name $colorName
+
         $button = New-Object System.Windows.Controls.Button
-        $button.Height = 50
+        $button.Style = $window.FindResource("RoundedButton")
+        $button.Height = 56
         $button.FontWeight = "Bold"
-        $button.Content = $task.Label
-        if ($task.Primary) {
-            $button.Background = Get-Brush "#111111"
-            $button.Foreground = Get-Brush "#FFFFFF"
-            $button.BorderThickness = [System.Windows.Thickness]::new(0)
-        }
-        else {
-            $button.Background = Get-Brush "#F3F4F6"
-            $button.Foreground = Get-Brush "#111111"
-            $button.BorderBrush = Get-Brush "#E5E7EB"
-            $button.BorderThickness = [System.Windows.Thickness]::new(1)
-        }
-        if ($task.Description) {
-            $button.ToolTip = $task.Description
-        }
+        $button.FontSize   = 15
+        $button.Content    = $task.Label
+        $button.Background = Get-Brush $accent.Bg
+        $button.Foreground = Get-Brush $accent.Fg
+        $button.BorderThickness = [System.Windows.Thickness]::new(0)
+        # Soft shadow for elevation
+        try {
+            $shadow = New-Object System.Windows.Media.Effects.DropShadowEffect
+            $shadow.BlurRadius = 14
+            $shadow.ShadowDepth = 2
+            $shadow.Opacity = 0.18
+            $shadow.Color = [System.Windows.Media.ColorConverter]::ConvertFromString("#000000")
+            $button.Effect = $shadow
+        } catch { }
+        if ($task.Description) { $button.ToolTip = $task.Description }
         [System.Windows.Controls.Grid]::SetColumn($button, 0)
         [void]$row.Children.Add($button)
 
         $statusBorder = New-Object System.Windows.Controls.Border
         $statusBorder.Margin = [System.Windows.Thickness]::new(12, 0, 0, 0)
-        $statusBorder.CornerRadius = [System.Windows.CornerRadius]::new(12)
-        $statusBorder.Background = Get-Brush "#E5E7EB"
+        $statusBorder.CornerRadius = [System.Windows.CornerRadius]::new(14)
+        $statusBorder.Background = Get-Brush $script:Palette.NeutralBg
         $statusBorder.Padding = [System.Windows.Thickness]::new(10, 0, 10, 0)
         [System.Windows.Controls.Grid]::SetColumn($statusBorder, 1)
 
@@ -973,18 +1108,22 @@ function Build-ActionButtons {
         }
         Apply-StatusVisual -Border $statusBorder -Text $statusText -State $persistedState
 
-        $taskKey = $task.Key
+        # Tag the button with the task key so the click handler doesn't depend on a closure
+        $button.Tag = $task.Key
         $button.Add_Click({
             param($sender, $e)
+            $clickedKey = $null
             try {
-                Start-TaskExecution -TaskKey $taskKey
+                $clickedKey = [string]$sender.Tag
+                Start-TaskExecution -TaskKey $clickedKey
             }
             catch {
-                Append-LogLine ("Launcher error: " + $_.Exception.Message)
-                Set-Status -TaskText "Launcher error" -StatusText $_.Exception.Message
-                Set-ControlsBusyState -Busy $false
+                try { Append-LogLine ("Click handler error: " + $_.Exception.Message) } catch { }
+                try { Set-Status -TaskText "Launcher error" -StatusText $_.Exception.Message } catch { }
+                try { Set-ControlsBusyState -Busy $false } catch { }
+                # Never re-throw: that would close the WPF host
             }
-        }.GetNewClosure())
+        })
 
         [void]$actionsPanel.Children.Add($row)
         $first = $false
@@ -1486,8 +1625,12 @@ function Start-TaskExecution {
     $process.add_OutputDataReceived({
         param($sender, $eventArgs)
         if ($null -ne $eventArgs.Data) {
+            $line = [string]$eventArgs.Data
             try {
-                $window.Dispatcher.Invoke([action]{ Append-LogLine $eventArgs.Data })
+                # BeginInvoke is non-blocking and never re-throws to the caller thread
+                $window.Dispatcher.BeginInvoke([action]{
+                    try { Append-LogLine $line } catch { }
+                }) | Out-Null
             }
             catch { }
         }
@@ -1496,8 +1639,11 @@ function Start-TaskExecution {
     $process.add_ErrorDataReceived({
         param($sender, $eventArgs)
         if ($null -ne $eventArgs.Data) {
+            $line = "ERROR: " + ([string]$eventArgs.Data)
             try {
-                $window.Dispatcher.Invoke([action]{ Append-LogLine ("ERROR: " + $eventArgs.Data) })
+                $window.Dispatcher.BeginInvoke([action]{
+                    try { Append-LogLine $line } catch { }
+                }) | Out-Null
             }
             catch { }
         }
@@ -1506,49 +1652,58 @@ function Start-TaskExecution {
     $process.add_Exited({
         param($sender, $eventArgs)
 
+        $exitCode = -1
+        try { $exitCode = $sender.ExitCode } catch { }
+
         try {
-            $window.Dispatcher.Invoke([action]{
+            # BeginInvoke so the worker thread never propagates an exception
+            $window.Dispatcher.BeginInvoke([action]{
                 try {
-                    $exitCode = -1
-                    try { $exitCode = $sender.ExitCode } catch { }
                     Append-LogLine ("Process finished with exit code " + $exitCode)
 
                     $finalState = if ($exitCode -eq 0) { "Done" } else { "Error" }
                     $taskKey = $script:CurrentTaskKey
                     $taskRef = $script:CurrentTask
 
-                    Set-ActionState -Key $taskKey -State $finalState
-                    Update-ScriptState -Key $taskKey -Status $finalState -ExitCode $exitCode
+                    if ($taskKey) { try { Set-ActionState -Key $taskKey -State $finalState } catch { } }
+                    if ($taskKey) { try { Update-ScriptState -Key $taskKey -Status $finalState -ExitCode $exitCode } catch { } }
 
-                    $reportPath = Write-RunReport -TaskName $taskRef.Label -ScriptPath $taskRef.ScriptPath -ExitCode $exitCode
-                    if ($reportPath) {
-                        Set-Status -TaskText $taskRef.Label -StatusText ("$finalState. Report saved to $reportPath")
-                    }
-                    else {
-                        Set-Status -TaskText $taskRef.Label -StatusText "$finalState. (No report - see logs)"
+                    $reportPath = $null
+                    if ($taskRef) {
+                        try {
+                            $reportPath = Write-RunReport -TaskName $taskRef.Label -ScriptPath $taskRef.ScriptPath -ExitCode $exitCode
+                        } catch { try { Append-LogLine ("Report error: " + $_.Exception.Message) } catch { } }
                     }
 
-                    Refresh-NetworkCards
-                    if ($taskRef.AuditAfterRun) {
-                        Refresh-AuditPanel
+                    if ($taskRef) {
+                        if ($reportPath) {
+                            try { Set-Status -TaskText $taskRef.Label -StatusText ("$finalState. Report saved to $reportPath") } catch { }
+                        }
+                        else {
+                            try { Set-Status -TaskText $taskRef.Label -StatusText "$finalState. (No report - see logs)" } catch { }
+                        }
+                    }
+
+                    try { Refresh-NetworkCards } catch { }
+                    if ($taskRef -and $taskRef.AuditAfterRun) {
+                        try { Refresh-AuditPanel } catch { }
                     }
 
                     if ($script:State.lastUpdated) {
-                        $lastUpdatedText.Text = "Last update: $($script:State.lastUpdated)"
+                        try { $lastUpdatedText.Text = "Last update: $($script:State.lastUpdated)" } catch { }
                     }
                 }
                 catch {
-                    Append-LogLine ("Launcher post-run error: " + $_.Exception.Message)
-                    Set-Status -TaskText "Launcher error" -StatusText $_.Exception.Message
+                    try { Append-LogLine ("Launcher post-run error: " + $_.Exception.Message) } catch { }
                 }
                 finally {
                     $script:CurrentProcess = $null
-                    Set-ControlsBusyState -Busy $false
+                    try { Set-ControlsBusyState -Busy $false } catch { }
                 }
-            })
+            }) | Out-Null
         }
         catch {
-            # If the dispatcher invoke itself fails (window already closed) - swallow silently
+            # If the dispatcher itself fails - swallow silently. NEVER re-throw.
         }
     })
 
@@ -1656,6 +1811,13 @@ $window.Add_SourceInitialized({
     Append-LogLine ("Assets   : $script:AssetsRoot")
     Append-LogLine ("Checks   : $script:ChecksRoot")
     Append-LogLine ("Net cfg  : $script:NetworkProfilesPath")
+
+    if ($script:DiscoveryDiagnostics) {
+        foreach ($diag in $script:DiscoveryDiagnostics) {
+            Append-LogLine ("DIAG: " + $diag)
+        }
+    }
+
     if ($script:Tasks.Count -eq 0) {
         Append-LogLine "WARNING: no script manifest found. Verify that assets\*.manifest.json files are next to the EXE."
     }

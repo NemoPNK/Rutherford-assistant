@@ -3,6 +3,7 @@
   "label": "Run Network",
   "description": "Rename network adapters and apply the IP / mask values from network-profiles.json.",
   "primary": false,
+  "color": "blue",
   "order": 20,
   "auditAfterRun": false
 }

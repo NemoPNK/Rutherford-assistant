@@ -73,11 +73,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: RutherfordAssistant-portable
+          name: RutherfordAssistant
           path: |
             dist\package\RutherfordAssistant.exe
             dist\package\LaRocheLauncher.bat
             dist\package\CONTENTS.txt
             dist\package\assets
-            dist\RutherfordAssistant-portable.zip
-            dist\RutherfordAssistant-portable.sha256
+            dist\RutherfordAssistant.zip
+            dist\RutherfordAssistant.sha256

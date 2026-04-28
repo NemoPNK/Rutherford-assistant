@@ -3,6 +3,7 @@
   "label": "Run Setup",
   "description": "Apply the Rutherford preparation tasks (wallpaper, language, OneDrive, registry tweaks, OPS folder).",
   "primary": true,
+  "color": "green",
   "order": 10,
   "auditAfterRun": true
 }
