@@ -187,6 +187,16 @@ $script:LogItems         = New-Object 'System.Collections.ObjectModel.Observable
 $script:Tasks            = New-Object 'System.Collections.Generic.List[hashtable]'
 $script:TasksByKey       = @{}
 $script:ButtonKeyMap     = @{}   # button ref -> task key (fallback if Tag fails under ps2exe)
+
+# File-based output handling. The script's stdout / stderr are redirected
+# to temp files by the OS itself (via Start-Process -RedirectStandardOutput).
+# The UI thread polls these files via a DispatcherTimer. This avoids ALL
+# Process events on background threads, which we suspect crash ps2exe.
+$script:CurrentOutputFile  = $null
+$script:CurrentErrorFile   = $null
+$script:OutputFilePosition = [int64]0
+$script:ErrorFilePosition  = [int64]0
+$script:CompletionHandled  = $false
 $script:AuditChecks      = @()
 $script:State            = @{
     computerName = $env:COMPUTERNAME
@@ -1198,11 +1208,12 @@ function Build-ActionButtons {
             }
 
             try {
-                Start-TaskExecution -TaskKey $clickedKey
-                Write-CrashLog "Start-TaskExecution returned for '$clickedKey'"
+                # NEW path: file-redirect approach. No background-thread events.
+                Start-TaskExecutionFileMode -TaskKey $clickedKey
+                Write-CrashLog "Start-TaskExecutionFileMode returned for '$clickedKey'"
             }
             catch {
-                Write-CrashLog ("Start-TaskExecution threw: " + $_.Exception.Message)
+                Write-CrashLog ("Start-TaskExecutionFileMode threw: " + $_.Exception.Message)
                 try { Append-LogLine ("Click handler error: " + $_.Exception.Message) } catch { }
                 try { Set-Status -TaskText "Launcher error" -StatusText $_.Exception.Message } catch { }
                 try { Set-ControlsBusyState -Busy $false } catch { }
@@ -1712,89 +1723,33 @@ function Start-TaskExecution {
     $process.StartInfo = $startInfo
     $process.EnableRaisingEvents = $true
 
+    # ====================================================================
+    # CRITICAL: these handlers run on background threads. They MUST NOT
+    # touch the UI directly and MUST NOT call Dispatcher.BeginInvoke.
+    # All they do is push to a thread-safe queue. The UI thread drains
+    # the queue via $script:OutputDrainTimer. This eliminates cross-thread
+    # WPF interactions, the prime suspect for silent ps2exe terminations.
+    # ====================================================================
+
     $process.add_OutputDataReceived({
         param($sender, $eventArgs)
         if ($null -ne $eventArgs.Data) {
-            $line = [string]$eventArgs.Data
-            try {
-                # BeginInvoke is non-blocking and never re-throws to the caller thread
-                $window.Dispatcher.BeginInvoke([action]{
-                    try { Append-LogLine $line } catch { }
-                }) | Out-Null
-            }
-            catch { }
+            try { $script:OutputQueue.Enqueue([string]$eventArgs.Data) } catch { }
         }
     })
 
     $process.add_ErrorDataReceived({
         param($sender, $eventArgs)
         if ($null -ne $eventArgs.Data) {
-            $line = "ERROR: " + ([string]$eventArgs.Data)
-            try {
-                $window.Dispatcher.BeginInvoke([action]{
-                    try { Append-LogLine $line } catch { }
-                }) | Out-Null
-            }
-            catch { }
+            try { $script:OutputQueue.Enqueue("ERROR: " + [string]$eventArgs.Data) } catch { }
         }
     })
 
     $process.add_Exited({
         param($sender, $eventArgs)
-
         $exitCode = -1
         try { $exitCode = $sender.ExitCode } catch { }
-
-        try {
-            # BeginInvoke so the worker thread never propagates an exception
-            $window.Dispatcher.BeginInvoke([action]{
-                try {
-                    Append-LogLine ("Process finished with exit code " + $exitCode)
-
-                    $finalState = if ($exitCode -eq 0) { "Done" } else { "Error" }
-                    $taskKey = $script:CurrentTaskKey
-                    $taskRef = $script:CurrentTask
-
-                    if ($taskKey) { try { Set-ActionState -Key $taskKey -State $finalState } catch { } }
-                    if ($taskKey) { try { Update-ScriptState -Key $taskKey -Status $finalState -ExitCode $exitCode } catch { } }
-
-                    $reportPath = $null
-                    if ($taskRef) {
-                        try {
-                            $reportPath = Write-RunReport -TaskName $taskRef.Label -ScriptPath $taskRef.ScriptPath -ExitCode $exitCode
-                        } catch { try { Append-LogLine ("Report error: " + $_.Exception.Message) } catch { } }
-                    }
-
-                    if ($taskRef) {
-                        if ($reportPath) {
-                            try { Set-Status -TaskText $taskRef.Label -StatusText ("$finalState. Report saved to $reportPath") } catch { }
-                        }
-                        else {
-                            try { Set-Status -TaskText $taskRef.Label -StatusText "$finalState. (No report - see logs)" } catch { }
-                        }
-                    }
-
-                    try { Refresh-NetworkCards } catch { }
-                    if ($taskRef -and $taskRef.AuditAfterRun) {
-                        try { Refresh-AuditPanel } catch { }
-                    }
-
-                    if ($script:State.lastUpdated) {
-                        try { $lastUpdatedText.Text = "Last update: $($script:State.lastUpdated)" } catch { }
-                    }
-                }
-                catch {
-                    try { Append-LogLine ("Launcher post-run error: " + $_.Exception.Message) } catch { }
-                }
-                finally {
-                    $script:CurrentProcess = $null
-                    try { Set-ControlsBusyState -Busy $false } catch { }
-                }
-            }) | Out-Null
-        }
-        catch {
-            # If the dispatcher itself fails - swallow silently. NEVER re-throw.
-        }
+        try { $script:ExitedSignalQueue.Enqueue([int]$exitCode) } catch { }
     })
 
     Write-CrashLog "Start-TaskExecution: about to call Process.Start"
@@ -1831,6 +1786,132 @@ function Start-TaskExecution {
         Append-LogLine ("BeginErrorReadLine failed: " + $_.Exception.Message)
     }
     Write-CrashLog "Start-TaskExecution: exit clean"
+}
+
+# ============================================================================
+# NEW: file-redirect-based task execution. Replaces the System.Diagnostics
+# event-based approach. ZERO callbacks on background threads.
+# ============================================================================
+
+function Start-TaskExecutionFileMode {
+    param([string]$TaskKey)
+
+    Write-CrashLog "[FileMode] Start-TaskExecution: enter (key='$TaskKey', busy=$script:IsBusy)"
+    if ($script:IsBusy) { Write-CrashLog "[FileMode] aborted, already busy"; return }
+
+    if (-not $script:TasksByKey.ContainsKey($TaskKey)) {
+        Write-CrashLog "[FileMode] unknown task '$TaskKey'"
+        try { Append-LogLine "Unknown task: '$TaskKey'" } catch { }
+        return
+    }
+    $task = $script:TasksByKey[$TaskKey]
+    if (-not (Test-Path $task.ScriptPath)) {
+        Write-CrashLog "[FileMode] script missing: $($task.ScriptPath)"
+        [System.Windows.MessageBox]::Show("Missing script: $($task.ScriptPath)", "Rutherford Assistant") | Out-Null
+        return
+    }
+
+    $script:LogItems.Clear()
+    $script:CurrentLogLines.Clear()
+    $script:LastReportPath = $null
+    $reportSummaryText.Text = "Report will be generated when the task finishes."
+    $openReportButton.IsEnabled = $false
+    $script:CurrentTask = $task
+    $script:CurrentTaskKey = $TaskKey
+    $script:RunStartedAt = Get-Date
+    $script:CompletionHandled = $false
+
+    Set-ActionState -Key $TaskKey -State "Running"
+    Set-ControlsBusyState -Busy $true
+    Set-Status -TaskText $task.Label -StatusText "Running... keep this window open."
+
+    Append-LogLine "Launcher root: $script:AppRoot"
+    Append-LogLine "Assets root: $script:AssetsRoot"
+    Append-LogLine "Starting task: $($task.Label)"
+    Append-LogLine "Script: $($task.ScriptPath)"
+
+    # Prepare output / error redirection files (in TEMP, always writable)
+    $stamp = Get-Date -Format "yyyyMMdd-HHmmss-fff"
+    $script:CurrentOutputFile = Join-Path $env:TEMP ("rutherford-out-$stamp.log")
+    $script:CurrentErrorFile  = Join-Path $env:TEMP ("rutherford-err-$stamp.log")
+    $script:OutputFilePosition = [int64]0
+    $script:ErrorFilePosition  = [int64]0
+    try {
+        Set-Content -Path $script:CurrentOutputFile -Value "" -Encoding UTF8 -Force
+        Set-Content -Path $script:CurrentErrorFile  -Value "" -Encoding UTF8 -Force
+    } catch { Write-CrashLog ("Could not prepare temp files: " + $_.Exception.Message) }
+    Write-CrashLog ("[FileMode] OutFile=" + $script:CurrentOutputFile)
+    Write-CrashLog ("[FileMode] ErrFile=" + $script:CurrentErrorFile)
+
+    Write-CrashLog "[FileMode] about to Start-Process"
+    try {
+        $argLine = "-NoProfile -ExecutionPolicy Bypass -File `"$($task.ScriptPath)`""
+        Write-CrashLog ("[FileMode] argLine=" + $argLine)
+        $proc = Start-Process -FilePath "powershell.exe" `
+            -ArgumentList $argLine `
+            -RedirectStandardOutput $script:CurrentOutputFile `
+            -RedirectStandardError  $script:CurrentErrorFile `
+            -WindowStyle Hidden `
+            -PassThru
+        Write-CrashLog ("[FileMode] Start-Process returned PID=" + $(if ($proc) { $proc.Id } else { "null" }))
+    }
+    catch {
+        Write-CrashLog ("[FileMode] Start-Process threw: " + $_.Exception.Message)
+        Append-LogLine ("Process start failed: " + $_.Exception.Message)
+        Set-ControlsBusyState -Busy $false
+        Set-ActionState -Key $TaskKey -State "Error"
+        return
+    }
+
+    if (-not $proc) {
+        Write-CrashLog "[FileMode] Start-Process returned null"
+        Set-ControlsBusyState -Busy $false
+        Set-ActionState -Key $TaskKey -State "Error"
+        return
+    }
+
+    $script:CurrentProcess = $proc
+    Write-CrashLog "[FileMode] CurrentProcess set, leaving the rest to the drain timer"
+}
+
+# Helper: read new bytes from a redirect file, decode, append as log lines.
+function Drain-RedirectFile {
+    param(
+        [string]$Path,
+        [ref]$PositionRef,
+        [string]$Prefix = ""
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return }
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+
+    try {
+        $stream = [System.IO.File]::Open(
+            $Path,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read,
+            [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+        )
+        try {
+            if ($PositionRef.Value -gt $stream.Length) { $PositionRef.Value = 0 }
+            $stream.Position = $PositionRef.Value
+            $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8, $true)
+            while (-not $reader.EndOfStream) {
+                $line = $reader.ReadLine()
+                if ($null -ne $line) {
+                    $trimmed = $line.TrimEnd("`r")
+                    if (-not [string]::IsNullOrWhiteSpace($trimmed)) {
+                        try { Append-LogLine ($Prefix + $trimmed) } catch { }
+                    }
+                }
+            }
+            $PositionRef.Value = $stream.Position
+        }
+        finally { $stream.Close() }
+    }
+    catch {
+        try { Write-CrashLog ("Drain-RedirectFile error on " + $Path + ": " + $_.Exception.Message) } catch { }
+    }
 }
 
 # ----------------------------------------------------------------------------
@@ -1891,6 +1972,18 @@ $window.Add_Closed({
     Write-CrashLog "Window.Closed event fired (window destroyed)"
 })
 
+$window.Add_Deactivated({
+    Write-CrashLog ("Window.Deactivated (focus lost). State=" + $window.WindowState + " IsVisible=" + $window.IsVisible)
+})
+
+$window.Add_StateChanged({
+    Write-CrashLog ("Window.StateChanged -> " + $window.WindowState)
+})
+
+$window.Add_IsVisibleChanged({
+    Write-CrashLog ("Window.IsVisibleChanged -> " + $window.IsVisible)
+})
+
 # ----------------------------------------------------------------------------
 # Background timer for network refresh
 # ----------------------------------------------------------------------------
@@ -1903,6 +1996,109 @@ $networkRefreshTimer.Add_Tick({
     }
 })
 $networkRefreshTimer.Start()
+
+# ----------------------------------------------------------------------------
+# Output drain timer - runs on UI thread, drains the queues populated by
+# background OutputDataReceived/ErrorDataReceived/Exited handlers.
+# All UI work happens HERE on the dispatcher thread, so no cross-thread bug.
+# ----------------------------------------------------------------------------
+
+function Handle-TaskCompletion {
+    param([int]$ExitCode)
+
+    Write-CrashLog "Handle-TaskCompletion: enter (ExitCode=$ExitCode)"
+    try {
+        Append-LogLine ("Process finished with exit code " + $ExitCode)
+
+        $finalState = if ($ExitCode -eq 0) { "Done" } else { "Error" }
+        $taskKey = $script:CurrentTaskKey
+        $taskRef = $script:CurrentTask
+
+        if ($taskKey) { try { Set-ActionState -Key $taskKey -State $finalState } catch { } }
+        if ($taskKey) { try { Update-ScriptState -Key $taskKey -Status $finalState -ExitCode $ExitCode } catch { } }
+
+        $reportPath = $null
+        if ($taskRef) {
+            try {
+                $reportPath = Write-RunReport -TaskName $taskRef.Label -ScriptPath $taskRef.ScriptPath -ExitCode $ExitCode
+            } catch { try { Append-LogLine ("Report error: " + $_.Exception.Message) } catch { } }
+        }
+
+        if ($taskRef) {
+            if ($reportPath) {
+                try { Set-Status -TaskText $taskRef.Label -StatusText ("$finalState. Report saved to $reportPath") } catch { }
+            }
+            else {
+                try { Set-Status -TaskText $taskRef.Label -StatusText "$finalState. (No report - see logs)" } catch { }
+            }
+        }
+
+        try { Refresh-NetworkCards } catch { Write-CrashLog ("Refresh-NetworkCards error: " + $_.Exception.Message) }
+        if ($taskRef -and $taskRef.AuditAfterRun) {
+            try { Refresh-AuditPanel } catch { Write-CrashLog ("Refresh-AuditPanel error: " + $_.Exception.Message) }
+        }
+
+        if ($script:State.lastUpdated) {
+            try { $lastUpdatedText.Text = "Last update: $($script:State.lastUpdated)" } catch { }
+        }
+    }
+    catch {
+        Write-CrashLog ("Handle-TaskCompletion crashed: " + $_.Exception.Message)
+        try { Append-LogLine ("Launcher post-run error: " + $_.Exception.Message) } catch { }
+    }
+    finally {
+        $script:CurrentProcess = $null
+        try { Set-ControlsBusyState -Busy $false } catch { }
+        Write-CrashLog "Handle-TaskCompletion: exit"
+    }
+}
+
+$script:OutputDrainTimer = New-Object System.Windows.Threading.DispatcherTimer
+$script:OutputDrainTimer.Interval = [TimeSpan]::FromMilliseconds(150)
+$script:OutputDrainTimer.Add_Tick({
+    try {
+        # 1. Read any new output / error from the redirect files
+        if ($script:CurrentOutputFile) {
+            Drain-RedirectFile -Path $script:CurrentOutputFile -PositionRef ([ref]$script:OutputFilePosition) -Prefix ""
+        }
+        if ($script:CurrentErrorFile) {
+            Drain-RedirectFile -Path $script:CurrentErrorFile -PositionRef ([ref]$script:ErrorFilePosition) -Prefix "ERROR: "
+        }
+
+        # 2. Detect process exit
+        if ($script:CurrentProcess -and -not $script:CompletionHandled) {
+            $hasExited = $false
+            try { $hasExited = $script:CurrentProcess.HasExited } catch { }
+            if ($hasExited) {
+                $exitCode = -1
+                try { $exitCode = $script:CurrentProcess.ExitCode } catch { }
+                Write-CrashLog ("Drain timer: process has exited with code " + $exitCode)
+
+                # Final flush of any remaining bytes
+                if ($script:CurrentOutputFile) {
+                    Drain-RedirectFile -Path $script:CurrentOutputFile -PositionRef ([ref]$script:OutputFilePosition) -Prefix ""
+                }
+                if ($script:CurrentErrorFile) {
+                    Drain-RedirectFile -Path $script:CurrentErrorFile -PositionRef ([ref]$script:ErrorFilePosition) -Prefix "ERROR: "
+                }
+
+                $script:CompletionHandled = $true
+                Handle-TaskCompletion -ExitCode $exitCode
+
+                # Clean up temp files (best effort)
+                try { if ($script:CurrentOutputFile -and (Test-Path -LiteralPath $script:CurrentOutputFile)) { Remove-Item -LiteralPath $script:CurrentOutputFile -Force -ErrorAction SilentlyContinue } } catch { }
+                try { if ($script:CurrentErrorFile  -and (Test-Path -LiteralPath $script:CurrentErrorFile))  { Remove-Item -LiteralPath $script:CurrentErrorFile  -Force -ErrorAction SilentlyContinue } } catch { }
+                $script:CurrentOutputFile = $null
+                $script:CurrentErrorFile  = $null
+            }
+        }
+    }
+    catch {
+        try { Write-CrashLog ("OutputDrainTimer crashed: " + $_.Exception.Message) } catch { }
+    }
+})
+$script:OutputDrainTimer.Start()
+Write-CrashLog "OutputDrainTimer started"
 
 # ----------------------------------------------------------------------------
 # Initial render

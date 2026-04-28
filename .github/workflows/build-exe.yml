@@ -7,11 +7,16 @@ on:
         description: "Version string baked into the EXE"
         required: false
         default: "1.1.0"
+  # Only auto-build when something that ACTUALLY ends up in the EXE changes.
+  # For changes to LaRoche.ps1, Network.ps1, checks/*, config/*, manifests,
+  # wallpaper, etc., NO build is needed - those files just need to be copied
+  # to the USB key. To force a build anyway, use the "Run workflow" button
+  # (workflow_dispatch above).
   push:
     branches:
       - main
     paths:
-      - "assets/**"
+      - "assets/RutherfordLauncher.ps1"
       - "scripts/build-exe.ps1"
       - ".github/workflows/build-exe.yml"
 
