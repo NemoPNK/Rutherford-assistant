@@ -162,6 +162,36 @@ function Ensure-Elevated {
 }
 
 # ----------------------------------------------------------------------------
+# File-based crash log. Survives launcher death, lets us see the LAST
+# operation attempted before any crash. Written to:
+#   C:\ProgramData\Rutherford\launcher.log
+# ----------------------------------------------------------------------------
+
+$script:CrashLogPath = $null
+try {
+    $logRoot = "C:\ProgramData\Rutherford"
+    if (-not (Test-Path -LiteralPath $logRoot)) {
+        New-Item -Path $logRoot -ItemType Directory -Force | Out-Null
+    }
+    $script:CrashLogPath = Join-Path $logRoot "launcher.log"
+}
+catch { $script:CrashLogPath = $null }
+
+function Write-CrashLog {
+    param([string]$Message)
+    if (-not $script:CrashLogPath) { return }
+    try {
+        $stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"
+        $line  = "[$stamp] $Message"
+        # Use .NET to append - flushes immediately, no PowerShell pipeline buffering
+        [System.IO.File]::AppendAllText($script:CrashLogPath, ($line + "`r`n"))
+    }
+    catch { }
+}
+
+Write-CrashLog "===== Launcher boot ====="
+
+# ----------------------------------------------------------------------------
 # Persistent state
 # ----------------------------------------------------------------------------
 
@@ -694,7 +724,7 @@ $script:AuditChecks = Discover-AuditChecks
             <Button Name="RefreshAuditButton"
                     Style="{StaticResource RoundedSecondaryButton}"
                     Margin="0,10,0,0"
-                    Content="Refresh LaRoche Audit" />
+                    Content="Refresh Setup Audit" />
 
             <Button Name="ClearLogsButton"
                     Style="{StaticResource RoundedSecondaryButton}"
@@ -726,8 +756,6 @@ $script:AuditChecks = Discover-AuditChecks
 
         <Grid Grid.Column="2">
           <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="18" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="18" />
             <RowDefinition Height="Auto" />
@@ -787,69 +815,79 @@ $script:AuditChecks = Discover-AuditChecks
             </Grid>
           </Border>
 
-          <Border Grid.Row="2"
-                  Background="#FFFFFF"
-                  BorderBrush="#E5E7EB"
-                  BorderThickness="1"
-                  CornerRadius="22"
-                  Padding="20">
-            <StackPanel>
-              <Grid>
-                <Grid.ColumnDefinitions>
-                  <ColumnDefinition Width="*" />
-                  <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0"
-                           Text="Network Cards"
-                           Foreground="#111111"
-                           FontSize="20"
-                           FontWeight="Bold" />
-                <TextBlock Grid.Column="1"
-                           Name="NetworkSummaryText"
-                           VerticalAlignment="Center"
+          <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="18" />
+              <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0"
+                    Background="#FFFFFF"
+                    BorderBrush="#E5E7EB"
+                    BorderThickness="1"
+                    CornerRadius="22"
+                    Padding="20">
+              <StackPanel>
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Grid.Column="0"
+                             Text="Network Cards"
+                             Foreground="#111111"
+                             FontSize="20"
+                             FontWeight="Bold" />
+                  <TextBlock Grid.Column="1"
+                             Name="NetworkSummaryText"
+                             VerticalAlignment="Center"
+                             Foreground="#52525B"
+                             Text="" />
+                </Grid>
+                <TextBlock Margin="0,8,0,0"
                            Foreground="#52525B"
-                           Text="" />
-              </Grid>
-              <TextBlock Margin="0,8,0,0"
-                         Foreground="#52525B"
-                         Text="Name, IP and mask must match Network.ps1 expectations." />
-              <StackPanel Name="NetworkCardsPanel"
-                          Margin="0,16,0,0" />
-            </StackPanel>
-          </Border>
+                           TextWrapping="Wrap"
+                           Text="Name, IP and mask must match Network.ps1 expectations." />
+                <StackPanel Name="NetworkCardsPanel"
+                            Margin="0,16,0,0" />
+              </StackPanel>
+            </Border>
+
+            <Border Grid.Column="2"
+                    Background="#FFFFFF"
+                    BorderBrush="#E5E7EB"
+                    BorderThickness="1"
+                    CornerRadius="22"
+                    Padding="20">
+              <StackPanel>
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Grid.Column="0"
+                             Text="Setup Audit"
+                             Foreground="#111111"
+                             FontSize="20"
+                             FontWeight="Bold" />
+                  <TextBlock Grid.Column="1"
+                             Name="AuditSummaryText"
+                             VerticalAlignment="Center"
+                             Foreground="#52525B"
+                             Text="" />
+                </Grid>
+                <TextBlock Margin="0,8,0,0"
+                           Foreground="#52525B"
+                           TextWrapping="Wrap"
+                           Text="Every modification expected from Setup is verified on this machine." />
+                <StackPanel Name="AuditChecksPanel"
+                            Margin="0,16,0,0" />
+              </StackPanel>
+            </Border>
+          </Grid>
 
           <Border Grid.Row="4"
-                  Background="#FFFFFF"
-                  BorderBrush="#E5E7EB"
-                  BorderThickness="1"
-                  CornerRadius="22"
-                  Padding="20">
-            <StackPanel>
-              <Grid>
-                <Grid.ColumnDefinitions>
-                  <ColumnDefinition Width="*" />
-                  <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0"
-                           Text="LaRoche Audit"
-                           Foreground="#111111"
-                           FontSize="20"
-                           FontWeight="Bold" />
-                <TextBlock Grid.Column="1"
-                           Name="AuditSummaryText"
-                           VerticalAlignment="Center"
-                           Foreground="#52525B"
-                           Text="" />
-              </Grid>
-              <TextBlock Margin="0,8,0,0"
-                         Foreground="#52525B"
-                         Text="Verifies that every modification expected from LaRoche.ps1 is actually applied on this machine." />
-              <StackPanel Name="AuditChecksPanel"
-                          Margin="0,16,0,0" />
-            </StackPanel>
-          </Border>
-
-          <Border Grid.Row="6"
                   Background="#0B0B0C"
                   BorderBrush="#232326"
                   BorderThickness="1"
@@ -1068,15 +1106,8 @@ function Build-ActionButtons {
         $button.Background = Get-Brush $accent.Bg
         $button.Foreground = Get-Brush $accent.Fg
         $button.BorderThickness = [System.Windows.Thickness]::new(0)
-        # Soft shadow for elevation
-        try {
-            $shadow = New-Object System.Windows.Media.Effects.DropShadowEffect
-            $shadow.BlurRadius = 14
-            $shadow.ShadowDepth = 2
-            $shadow.Opacity = 0.18
-            $shadow.Color = [System.Windows.Media.ColorConverter]::ConvertFromString("#000000")
-            $button.Effect = $shadow
-        } catch { }
+        # NOTE: drop-shadow effect intentionally removed - was suspected
+        # to cause ps2exe rendering crashes on click.
         if ($task.Description) { $button.ToolTip = $task.Description }
         [System.Windows.Controls.Grid]::SetColumn($button, 0)
         [void]$row.Children.Add($button)
@@ -1113,15 +1144,28 @@ function Build-ActionButtons {
         $button.Add_Click({
             param($sender, $e)
             $clickedKey = $null
+            try { $clickedKey = [string]$sender.Tag } catch { }
+            Write-CrashLog "Click received: '$clickedKey'"
             try {
-                $clickedKey = [string]$sender.Tag
-                Start-TaskExecution -TaskKey $clickedKey
+                # Defer the actual work to the next dispatcher cycle so the click
+                # handler returns immediately. Avoids ps2exe weirdness with
+                # synchronous Process.Start inside an event handler.
+                $window.Dispatcher.BeginInvoke([action]{
+                    Write-CrashLog "Click dispatched: '$clickedKey'"
+                    try {
+                        Start-TaskExecution -TaskKey $clickedKey
+                        Write-CrashLog "Start-TaskExecution returned for '$clickedKey'"
+                    }
+                    catch {
+                        Write-CrashLog ("Start-TaskExecution threw: " + $_.Exception.Message)
+                        try { Append-LogLine ("Click handler error: " + $_.Exception.Message) } catch { }
+                        try { Set-Status -TaskText "Launcher error" -StatusText $_.Exception.Message } catch { }
+                        try { Set-ControlsBusyState -Busy $false } catch { }
+                    }
+                }) | Out-Null
             }
             catch {
-                try { Append-LogLine ("Click handler error: " + $_.Exception.Message) } catch { }
-                try { Set-Status -TaskText "Launcher error" -StatusText $_.Exception.Message } catch { }
-                try { Set-ControlsBusyState -Busy $false } catch { }
-                # Never re-throw: that would close the WPF host
+                Write-CrashLog ("BeginInvoke threw: " + $_.Exception.Message)
             }
         })
 
@@ -1577,16 +1621,21 @@ function Write-RunReport {
 function Start-TaskExecution {
     param([string]$TaskKey)
 
-    if ($script:IsBusy) { return }
+    Write-CrashLog "Start-TaskExecution: enter (key='$TaskKey', busy=$script:IsBusy)"
+
+    if ($script:IsBusy) { Write-CrashLog "Start-TaskExecution: aborted, already busy"; return }
 
     if (-not $script:TasksByKey.ContainsKey($TaskKey)) {
+        Write-CrashLog "Start-TaskExecution: unknown task key"
         [System.Windows.MessageBox]::Show("Unknown task: $TaskKey", "Rutherford Assistant") | Out-Null
         return
     }
 
     $task = $script:TasksByKey[$TaskKey]
+    Write-CrashLog "Start-TaskExecution: task resolved (label='$($task.Label)' script='$($task.ScriptPath)')"
 
     if (-not (Test-Path $task.ScriptPath)) {
+        Write-CrashLog "Start-TaskExecution: script file missing"
         [System.Windows.MessageBox]::Show("Missing script: $($task.ScriptPath)", "Rutherford Assistant") | Out-Null
         return
     }
@@ -1707,11 +1756,14 @@ function Start-TaskExecution {
         }
     })
 
+    Write-CrashLog "Start-TaskExecution: about to call Process.Start"
     try {
         $started = $process.Start()
+        Write-CrashLog "Start-TaskExecution: Process.Start returned $started"
     }
     catch {
         $started = $false
+        Write-CrashLog ("Start-TaskExecution: Process.Start threw: " + $_.Exception.Message)
         Append-LogLine ("Process start failed: " + $_.Exception.Message)
     }
 
@@ -1723,8 +1775,21 @@ function Start-TaskExecution {
     }
 
     $script:CurrentProcess = $process
-    try { $process.BeginOutputReadLine() } catch { Append-LogLine ("BeginOutputReadLine failed: " + $_.Exception.Message) }
-    try { $process.BeginErrorReadLine() }  catch { Append-LogLine ("BeginErrorReadLine failed: " + $_.Exception.Message) }
+    try {
+        $process.BeginOutputReadLine()
+        Write-CrashLog "Start-TaskExecution: BeginOutputReadLine OK"
+    } catch {
+        Write-CrashLog ("BeginOutputReadLine threw: " + $_.Exception.Message)
+        Append-LogLine ("BeginOutputReadLine failed: " + $_.Exception.Message)
+    }
+    try {
+        $process.BeginErrorReadLine()
+        Write-CrashLog "Start-TaskExecution: BeginErrorReadLine OK"
+    }  catch {
+        Write-CrashLog ("BeginErrorReadLine threw: " + $_.Exception.Message)
+        Append-LogLine ("BeginErrorReadLine failed: " + $_.Exception.Message)
+    }
+    Write-CrashLog "Start-TaskExecution: exit clean"
 }
 
 # ----------------------------------------------------------------------------

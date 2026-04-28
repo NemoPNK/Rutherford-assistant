@@ -20,7 +20,6 @@ $repoRoot       = Split-Path -Parent $PSScriptRoot
 $distRoot       = Join-Path $repoRoot "dist"
 $packageRoot    = Join-Path $distRoot "package"
 $assetsSource   = Join-Path $repoRoot "assets"
-$launcherSource = Join-Path $repoRoot "LaRocheLauncher.bat"
 $scriptSource   = Join-Path $assetsSource "RutherfordLauncher.ps1"
 $exeTarget      = Join-Path $packageRoot "RutherfordAssistant.exe"
 $zipTarget      = Join-Path $distRoot "RutherfordAssistant.zip"
@@ -143,8 +142,7 @@ else {
 # Stage package contents
 # ---------------------------------------------------------------------------
 
-Write-Host "Copying launcher files..."
-Copy-Item -Path $launcherSource -Destination (Join-Path $packageRoot "LaRocheLauncher.bat") -Force
+Write-Host "Copying assets folder..."
 Copy-Item -Path $assetsSource   -Destination (Join-Path $packageRoot "assets") -Recurse -Force
 
 # Strip macOS metadata that sometimes makes it into the repo
