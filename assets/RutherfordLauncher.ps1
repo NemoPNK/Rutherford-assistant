@@ -38,6 +38,9 @@ foreach ($_cand in $_logCandidates) {
 function Write-CrashLog {
     param([string]$Message)
     if (-not $script:CrashLogPath) { return }
+    # Respect the runtime config toggle (read later from assets/config/launcher.json).
+    # Default to TRUE before config is loaded so we still capture early boot.
+    if ($null -ne $script:Config -and -not $script:Config.writeCrashLog) { return }
     try {
         $stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"
         [System.IO.File]::AppendAllText($script:CrashLogPath, ("[$stamp] " + $Message + "`r`n"))
@@ -123,8 +126,51 @@ if (-not $script:AssetsRoot) {
 $script:ChecksRoot         = Join-Path $script:AssetsRoot "checks"
 $script:ReportsRoot        = Join-Path $script:AppRoot "reports"
 $script:NetworkProfilesPath = Join-Path $script:AssetsRoot "config\network-profiles.json"
+$script:LauncherConfigPath = Join-Path $script:AssetsRoot "config\launcher.json"
 $script:StateRoot          = "C:\ProgramData\Rutherford"
 $script:StateFilePath      = Join-Path $script:StateRoot "launcher-state.json"
+
+# ----------------------------------------------------------------------------
+# Runtime config (read from assets/config/launcher.json)
+# These toggles let the operator disable file outputs WITHOUT rebuilding the EXE.
+# ----------------------------------------------------------------------------
+
+$script:Config = @{
+    writeCrashLog  = $true   # default ON until we read the JSON
+    writeReports   = $true
+    writeStateFile = $true
+}
+
+try {
+    if (Test-Path -LiteralPath $script:LauncherConfigPath) {
+        $raw = Get-Content -LiteralPath $script:LauncherConfigPath -Raw -Encoding UTF8
+        $cfg = $raw | ConvertFrom-Json
+        if ($cfg) {
+            if ($null -ne $cfg.writeCrashLog)  { $script:Config.writeCrashLog  = [bool]$cfg.writeCrashLog }
+            if ($null -ne $cfg.writeReports)   { $script:Config.writeReports   = [bool]$cfg.writeReports }
+            if ($null -ne $cfg.writeStateFile) { $script:Config.writeStateFile = [bool]$cfg.writeStateFile }
+        }
+    }
+}
+catch {
+    # Bad JSON - keep defaults
+}
+
+Write-CrashLog ("Config loaded: writeCrashLog=" + $script:Config.writeCrashLog +
+                " writeReports=" + $script:Config.writeReports +
+                " writeStateFile=" + $script:Config.writeStateFile)
+
+# If the operator disabled crash logging, clean up any boot-time log file we
+# created before the config was read. After this point Write-CrashLog also
+# returns early thanks to the config check inside the function.
+if (-not $script:Config.writeCrashLog -and $script:CrashLogPath) {
+    try {
+        if (Test-Path -LiteralPath $script:CrashLogPath) {
+            Remove-Item -LiteralPath $script:CrashLogPath -Force -ErrorAction SilentlyContinue
+        }
+    } catch { }
+    $script:CrashLogPath = $null
+}
 
 # ----------------------------------------------------------------------------
 # ColorLoop Design System palette
@@ -257,6 +303,7 @@ function Load-State {
 }
 
 function Save-State {
+    if ($null -ne $script:Config -and -not $script:Config.writeStateFile) { return }
     try {
         if (-not (Test-Path $script:StateRoot)) {
             New-Item -Path $script:StateRoot -ItemType Directory -Force | Out-Null
@@ -1542,6 +1589,10 @@ function Convert-LogsToHtml {
 
 function Write-RunReport {
     param([string]$TaskName, [string]$ScriptPath, [int]$ExitCode)
+
+    if ($null -ne $script:Config -and -not $script:Config.writeReports) {
+        return $null
+    }
 
     try {
         $reportPath = Get-ReportFilePath -TaskName $TaskName
