@@ -136,6 +136,7 @@ $script:CurrentLogLines  = New-Object System.Collections.Generic.List[string]
 $script:LogItems         = New-Object 'System.Collections.ObjectModel.ObservableCollection[string]'
 $script:Tasks            = New-Object 'System.Collections.Generic.List[hashtable]'
 $script:TasksByKey       = @{}
+$script:ButtonKeyMap     = @{}   # button ref -> task key (fallback if Tag fails under ps2exe)
 $script:AuditChecks      = @()
 $script:State            = @{
     computerName = $env:COMPUTERNAME
@@ -1139,33 +1140,54 @@ function Build-ActionButtons {
         }
         Apply-StatusVisual -Border $statusBorder -Text $statusText -State $persistedState
 
-        # Tag the button with the task key so the click handler doesn't depend on a closure
+        # Tag the button with the task key. Also store the mapping in a
+        # script-level dictionary as a fallback in case ps2exe loses Tag.
         $button.Tag = $task.Key
+        try { $script:ButtonKeyMap[$button] = $task.Key } catch { }
+
         $button.Add_Click({
             param($sender, $e)
-            $clickedKey = $null
+            $clickedKey = ""
+
+            # Try Tag first
             try { $clickedKey = [string]$sender.Tag } catch { }
+
+            # Fallback: dictionary lookup by button reference
+            if ([string]::IsNullOrWhiteSpace($clickedKey)) {
+                try {
+                    if ($script:ButtonKeyMap.ContainsKey($sender)) {
+                        $clickedKey = [string]$script:ButtonKeyMap[$sender]
+                    }
+                } catch { }
+            }
+
+            # Fallback 2: match by button label (Content)
+            if ([string]::IsNullOrWhiteSpace($clickedKey)) {
+                try {
+                    $label = [string]$sender.Content
+                    foreach ($t in $script:Tasks) {
+                        if ($t.Label -eq $label) { $clickedKey = $t.Key; break }
+                    }
+                } catch { }
+            }
+
             Write-CrashLog "Click received: '$clickedKey'"
+            if ([string]::IsNullOrWhiteSpace($clickedKey)) {
+                Write-CrashLog "Click ignored: could not resolve task key from Tag/dict/label"
+                try { Append-LogLine "Click ignored: could not resolve task key" } catch { }
+                return
+            }
+
             try {
-                # Defer the actual work to the next dispatcher cycle so the click
-                # handler returns immediately. Avoids ps2exe weirdness with
-                # synchronous Process.Start inside an event handler.
-                $window.Dispatcher.BeginInvoke([action]{
-                    Write-CrashLog "Click dispatched: '$clickedKey'"
-                    try {
-                        Start-TaskExecution -TaskKey $clickedKey
-                        Write-CrashLog "Start-TaskExecution returned for '$clickedKey'"
-                    }
-                    catch {
-                        Write-CrashLog ("Start-TaskExecution threw: " + $_.Exception.Message)
-                        try { Append-LogLine ("Click handler error: " + $_.Exception.Message) } catch { }
-                        try { Set-Status -TaskText "Launcher error" -StatusText $_.Exception.Message } catch { }
-                        try { Set-ControlsBusyState -Busy $false } catch { }
-                    }
-                }) | Out-Null
+                Start-TaskExecution -TaskKey $clickedKey
+                Write-CrashLog "Start-TaskExecution returned for '$clickedKey'"
             }
             catch {
-                Write-CrashLog ("BeginInvoke threw: " + $_.Exception.Message)
+                Write-CrashLog ("Start-TaskExecution threw: " + $_.Exception.Message)
+                try { Append-LogLine ("Click handler error: " + $_.Exception.Message) } catch { }
+                try { Set-Status -TaskText "Launcher error" -StatusText $_.Exception.Message } catch { }
+                try { Set-ControlsBusyState -Busy $false } catch { }
+                # Never re-throw - the WPF host would close
             }
         })
 
@@ -1626,8 +1648,8 @@ function Start-TaskExecution {
     if ($script:IsBusy) { Write-CrashLog "Start-TaskExecution: aborted, already busy"; return }
 
     if (-not $script:TasksByKey.ContainsKey($TaskKey)) {
-        Write-CrashLog "Start-TaskExecution: unknown task key"
-        [System.Windows.MessageBox]::Show("Unknown task: $TaskKey", "Rutherford Assistant") | Out-Null
+        Write-CrashLog "Start-TaskExecution: unknown task key '$TaskKey'"
+        try { Append-LogLine "Unknown task key: '$TaskKey'. Available: $(@($script:TasksByKey.Keys) -join ', ')" } catch { }
         return
     }
 
