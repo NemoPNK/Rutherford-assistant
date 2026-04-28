@@ -1,0 +1,24 @@
+[
+  {
+    "id": "intellitrax",
+    "possibleCurrentNames": ["Ethernet", "IntelliTrax"],
+    "newName": "IntelliTrax",
+    "mode": "static",
+    "ipv4": "172.16.1.15",
+    "subnetMask": "255.255.0.0"
+  },
+  {
+    "id": "network",
+    "possibleCurrentNames": ["Ethernet 2", "Network"],
+    "newName": "Network",
+    "mode": "dhcp"
+  },
+  {
+    "id": "pupi",
+    "possibleCurrentNames": ["Ethernet 3", "PUPI"],
+    "newName": "PUPI",
+    "mode": "static",
+    "ipv4": "10.10.6.15",
+    "subnetMask": "255.255.255.0"
+  }
+]

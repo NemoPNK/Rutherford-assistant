@@ -1,0 +1,27 @@
+﻿Rutherford Assistant portable package
+Version: 1.1.0
+Built: 2026-04-28T12:54:28
+
+Files:
+       513  LaRocheLauncher.bat
+     95744  RutherfordAssistant.exe
+  19803872  assets\ColorLoop Design System.fig
+       233  assets\LaRoche.manifest.json
+     16861  assets\LaRoche.ps1
+       221  assets\Network.manifest.json
+      6963  assets\Network.ps1
+       448  assets\READ ME.txt
+     61827  assets\RutherfordLauncher.ps1
+    460531  assets\wallpaper.jpg
+       951  assets\checks\10-wallpaper.check.ps1
+       984  assets\checks\20-onedrive.check.ps1
+       827  assets\checks\30-widget.check.ps1
+      1158  assets\checks\40-language.check.ps1
+       850  assets\checks\50-start-policy.check.ps1
+       622  assets\checks\60-ops-folder.check.ps1
+      1536  assets\checks\70-standby.check.ps1
+      1928  assets\checks\80-consumer-features.check.ps1
+      1478  assets\checks\90-touch-keyboard.check.ps1
+      1702  assets\checks\95-appx-cleanup.check.ps1
+      1366  assets\checks\97-startup-cleanup.check.ps1
+       543  assets\config\network-profiles.json

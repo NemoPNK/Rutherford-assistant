@@ -4,22 +4,70 @@ Add-Type -AssemblyName WindowsBase
 
 # ----------------------------------------------------------------------------
 # Path resolution
+# Works in both raw .ps1 and ps2exe-compiled .exe contexts.
+# In ps2exe, $PSCommandPath / $MyInvocation are usually empty, so we fall back
+# to the running process MainModule path (which IS the EXE itself).
 # ----------------------------------------------------------------------------
 
-$script:LauncherPath = if ($PSCommandPath) { $PSCommandPath } else { $MyInvocation.MyCommand.Path }
-$script:SelfRoot = Split-Path -Parent $script:LauncherPath
-
-if (Test-Path (Join-Path $script:SelfRoot "assets")) {
-    $script:AppRoot = $script:SelfRoot
-    $script:AssetsRoot = Join-Path $script:AppRoot "assets"
+function Get-LauncherSelfPath {
+    if ($PSCommandPath) { return $PSCommandPath }
+    if ($MyInvocation.MyCommand.Path) { return $MyInvocation.MyCommand.Path }
+    try {
+        $main = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+        if ($main -and (Test-Path -LiteralPath $main)) { return $main }
+    }
+    catch { }
+    return $null
 }
-elseif ((Split-Path -Leaf $script:SelfRoot) -eq "assets") {
-    $script:AssetsRoot = $script:SelfRoot
-    $script:AppRoot = Split-Path -Parent $script:AssetsRoot
+
+$script:LauncherPath = Get-LauncherSelfPath
+
+if ($script:LauncherPath) {
+    $script:SelfRoot = Split-Path -Parent $script:LauncherPath
 }
 else {
-    $script:AssetsRoot = $script:SelfRoot
-    $script:AppRoot = Split-Path -Parent $script:AssetsRoot
+    # Last resort: current working directory (when launched from Explorer this
+    # is usually where the EXE sits)
+    $script:SelfRoot = (Get-Location).Path
+}
+
+if (-not $script:SelfRoot) {
+    $script:SelfRoot = [System.IO.Directory]::GetCurrentDirectory()
+}
+
+$script:AssetsRoot = $null
+$script:AppRoot    = $null
+
+# Candidate paths to search for assets/ - first hit wins
+$assetCandidates = @(
+    (Join-Path $script:SelfRoot "assets"),
+    $script:SelfRoot,
+    (Join-Path $script:SelfRoot "..\assets"),
+    (Join-Path ([System.IO.Directory]::GetCurrentDirectory()) "assets")
+)
+
+foreach ($candidate in $assetCandidates) {
+    if (-not $candidate) { continue }
+    if (-not (Test-Path -LiteralPath $candidate)) { continue }
+    $leaf = Split-Path -Leaf $candidate
+    if ($leaf -eq "assets") {
+        $script:AssetsRoot = (Resolve-Path -LiteralPath $candidate).Path
+        $script:AppRoot    = Split-Path -Parent $script:AssetsRoot
+        break
+    }
+    # If folder exists but is not "assets", check if it CONTAINS an "assets" subfolder
+    $sub = Join-Path $candidate "assets"
+    if (Test-Path -LiteralPath $sub) {
+        $script:AppRoot    = (Resolve-Path -LiteralPath $candidate).Path
+        $script:AssetsRoot = (Resolve-Path -LiteralPath $sub).Path
+        break
+    }
+}
+
+if (-not $script:AssetsRoot) {
+    # Final fallback - keep launcher running so the operator sees a clear message
+    $script:AppRoot    = $script:SelfRoot
+    $script:AssetsRoot = Join-Path $script:SelfRoot "assets"
 }
 
 $script:ChecksRoot         = Join-Path $script:AssetsRoot "checks"
@@ -138,9 +186,8 @@ function Update-ScriptState {
 function Discover-Tasks {
     $tasks = New-Object 'System.Collections.Generic.List[hashtable]'
 
-    if (-not (Test-Path $script:AssetsRoot)) {
-        return $tasks
-    }
+    if ([string]::IsNullOrWhiteSpace($script:AssetsRoot)) { return $tasks }
+    if (-not (Test-Path -LiteralPath $script:AssetsRoot)) { return $tasks }
 
     $manifests = Get-ChildItem -Path $script:AssetsRoot -Filter "*.manifest.json" -File -ErrorAction SilentlyContinue
     foreach ($manifestFile in $manifests) {
@@ -191,7 +238,8 @@ function Discover-Tasks {
 
 function Discover-AuditChecks {
     $checks = @()
-    if (-not (Test-Path $script:ChecksRoot)) { return $checks }
+    if ([string]::IsNullOrWhiteSpace($script:ChecksRoot)) { return $checks }
+    if (-not (Test-Path -LiteralPath $script:ChecksRoot)) { return $checks }
 
     Get-ChildItem -Path $script:ChecksRoot -Filter "*.check.ps1" -File -ErrorAction SilentlyContinue |
         Sort-Object Name |
@@ -219,7 +267,10 @@ function Discover-AuditChecks {
 # ----------------------------------------------------------------------------
 
 function Read-NetworkProfiles {
-    if (-not (Test-Path $script:NetworkProfilesPath)) {
+    if ([string]::IsNullOrWhiteSpace($script:NetworkProfilesPath)) {
+        throw "Network config path is empty (assets folder was not found)."
+    }
+    if (-not (Test-Path -LiteralPath $script:NetworkProfilesPath)) {
         throw "Missing network config: $script:NetworkProfilesPath"
     }
 
@@ -762,6 +813,11 @@ $actionsHelpText     = $window.FindName("ActionsHelpText")
 $logsListBox.ItemsSource = $script:LogItems
 $computerNameText.Text   = $env:COMPUTERNAME
 $stateFileText.Text      = $script:StateFilePath
+
+$heroSubtitle = $window.FindName("HeroSubtitle")
+if ($heroSubtitle) {
+    $heroSubtitle.Text = "Assets folder: $script:AssetsRoot"
+}
 
 # ----------------------------------------------------------------------------
 # Color helpers
@@ -1594,7 +1650,15 @@ Refresh-AuditPanel
 Set-Status -TaskText "Ready" -StatusText "Waiting for action."
 
 $window.Add_SourceInitialized({
-    Append-LogLine "Launcher ready. Tasks discovered: $($script:Tasks.Count). Audit checks: $($script:AuditChecks.Count)."
+    Append-LogLine ("Launcher ready. Tasks: $($script:Tasks.Count). Audit checks: $($script:AuditChecks.Count).")
+    Append-LogLine ("Self path: $script:LauncherPath")
+    Append-LogLine ("App root : $script:AppRoot")
+    Append-LogLine ("Assets   : $script:AssetsRoot")
+    Append-LogLine ("Checks   : $script:ChecksRoot")
+    Append-LogLine ("Net cfg  : $script:NetworkProfilesPath")
+    if ($script:Tasks.Count -eq 0) {
+        Append-LogLine "WARNING: no script manifest found. Verify that assets\*.manifest.json files are next to the EXE."
+    }
 })
 
 [void]$window.ShowDialog()
