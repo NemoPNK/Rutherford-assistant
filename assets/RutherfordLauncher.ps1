@@ -2,6 +2,10 @@ Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName WindowsBase
 
+# ----------------------------------------------------------------------------
+# Path resolution
+# ----------------------------------------------------------------------------
+
 $script:LauncherPath = if ($PSCommandPath) { $PSCommandPath } else { $MyInvocation.MyCommand.Path }
 $script:SelfRoot = Split-Path -Parent $script:LauncherPath
 
@@ -18,20 +22,36 @@ else {
     $script:AppRoot = Split-Path -Parent $script:AssetsRoot
 }
 
-$script:ReportsRoot = Join-Path $script:AppRoot "reports"
+$script:ChecksRoot         = Join-Path $script:AssetsRoot "checks"
+$script:ReportsRoot        = Join-Path $script:AppRoot "reports"
 $script:NetworkProfilesPath = Join-Path $script:AssetsRoot "config\network-profiles.json"
-$script:IsBusy = $false
-$script:CurrentProcess = $null
-$script:CurrentTask = $null
-$script:LastReportPath = $null
-$script:RunStartedAt = $null
-$script:CurrentLogLines = New-Object System.Collections.Generic.List[string]
-$script:LogItems = New-Object 'System.Collections.ObjectModel.ObservableCollection[string]'
-$script:ActionState = @{
-    setup   = "Not done"
-    network = "Not done"
-    updates = "Not done"
+$script:StateRoot          = "C:\ProgramData\Rutherford"
+$script:StateFilePath      = Join-Path $script:StateRoot "launcher-state.json"
+
+# ----------------------------------------------------------------------------
+# Globals
+# ----------------------------------------------------------------------------
+
+$script:IsBusy           = $false
+$script:CurrentProcess   = $null
+$script:CurrentTask      = $null
+$script:CurrentTaskKey   = $null
+$script:LastReportPath   = $null
+$script:RunStartedAt     = $null
+$script:CurrentLogLines  = New-Object System.Collections.Generic.List[string]
+$script:LogItems         = New-Object 'System.Collections.ObjectModel.ObservableCollection[string]'
+$script:Tasks            = New-Object 'System.Collections.Generic.List[hashtable]'
+$script:TasksByKey       = @{}
+$script:AuditChecks      = @()
+$script:State            = @{
+    computerName = $env:COMPUTERNAME
+    lastUpdated  = $null
+    scripts      = @{}
 }
+
+# ----------------------------------------------------------------------------
+# Admin elevation
+# ----------------------------------------------------------------------------
 
 function Test-IsAdmin {
     $currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -40,14 +60,163 @@ function Test-IsAdmin {
 }
 
 function Ensure-Elevated {
-    if (Test-IsAdmin) {
-        return
-    }
+    if (Test-IsAdmin) { return }
 
     $argumentList = "-NoProfile -ExecutionPolicy Bypass -STA -File `"$script:LauncherPath`""
     Start-Process -FilePath "powershell.exe" -ArgumentList $argumentList -Verb RunAs | Out-Null
     exit
 }
+
+# ----------------------------------------------------------------------------
+# Persistent state
+# ----------------------------------------------------------------------------
+
+function Load-State {
+    try {
+        if (Test-Path $script:StateFilePath) {
+            $raw = Get-Content -Path $script:StateFilePath -Raw -Encoding UTF8
+            if ([string]::IsNullOrWhiteSpace($raw)) { return }
+            $loaded = $raw | ConvertFrom-Json -ErrorAction Stop
+            if ($loaded -and $loaded.computerName -eq $env:COMPUTERNAME) {
+                $scripts = @{}
+                if ($loaded.scripts) {
+                    foreach ($prop in $loaded.scripts.PSObject.Properties) {
+                        $scripts[$prop.Name] = @{
+                            status      = $prop.Value.status
+                            completedAt = $prop.Value.completedAt
+                            exitCode    = $prop.Value.exitCode
+                        }
+                    }
+                }
+                $script:State = @{
+                    computerName = $env:COMPUTERNAME
+                    lastUpdated  = $loaded.lastUpdated
+                    scripts      = $scripts
+                }
+            }
+        }
+    }
+    catch {
+        # Corrupted state file: silently keep defaults
+    }
+}
+
+function Save-State {
+    try {
+        if (-not (Test-Path $script:StateRoot)) {
+            New-Item -Path $script:StateRoot -ItemType Directory -Force | Out-Null
+        }
+        $script:State.lastUpdated = (Get-Date).ToString("s")
+        $json = $script:State | ConvertTo-Json -Depth 6
+        Set-Content -Path $script:StateFilePath -Value $json -Encoding UTF8 -ErrorAction Stop
+    }
+    catch {
+        # Cannot persist (e.g. read-only) - keep going, never crash the launcher
+    }
+}
+
+function Update-ScriptState {
+    param(
+        [string]$Key,
+        [string]$Status,
+        [int]$ExitCode = -1
+    )
+
+    if (-not $script:State.scripts) { $script:State.scripts = @{} }
+    $script:State.scripts[$Key] = @{
+        status      = $Status
+        completedAt = (Get-Date).ToString("s")
+        exitCode    = $ExitCode
+    }
+    Save-State
+}
+
+# ----------------------------------------------------------------------------
+# Task discovery (auto-discovery via *.manifest.json)
+# ----------------------------------------------------------------------------
+
+function Discover-Tasks {
+    $tasks = New-Object 'System.Collections.Generic.List[hashtable]'
+
+    if (-not (Test-Path $script:AssetsRoot)) {
+        return $tasks
+    }
+
+    $manifests = Get-ChildItem -Path $script:AssetsRoot -Filter "*.manifest.json" -File -ErrorAction SilentlyContinue
+    foreach ($manifestFile in $manifests) {
+        try {
+            $raw = Get-Content -Path $manifestFile.FullName -Raw -Encoding UTF8
+            $manifest = $raw | ConvertFrom-Json
+            if (-not $manifest -or -not $manifest.key) { continue }
+
+            $baseName = [System.IO.Path]::GetFileNameWithoutExtension($manifestFile.Name)
+            if ($baseName.EndsWith(".manifest")) {
+                $baseName = $baseName.Substring(0, $baseName.Length - ".manifest".Length)
+            }
+
+            $scriptPath = Join-Path $manifestFile.DirectoryName ("$baseName.ps1")
+            if (-not (Test-Path $scriptPath)) { continue }
+
+            $task = @{
+                Key            = [string]$manifest.key
+                Label          = if ($manifest.label) { [string]$manifest.label } else { "Run $baseName" }
+                Description    = if ($manifest.description) { [string]$manifest.description } else { "" }
+                Order          = if ($null -ne $manifest.order) { [int]$manifest.order } else { 999 }
+                Primary        = if ($null -ne $manifest.primary) { [bool]$manifest.primary } else { $false }
+                AuditAfterRun  = if ($null -ne $manifest.auditAfterRun) { [bool]$manifest.auditAfterRun } else { $false }
+                ScriptPath     = $scriptPath
+                ManifestPath   = $manifestFile.FullName
+                Button         = $null
+                StatusBorder   = $null
+                StatusText     = $null
+            }
+
+            $tasks.Add($task) | Out-Null
+        }
+        catch {
+            # Skip bad manifest, never crash
+        }
+    }
+
+    # Sort by Order then by Label
+    $sorted = $tasks | Sort-Object @{Expression = { $_.Order }}, @{Expression = { $_.Label }}
+    $result = New-Object 'System.Collections.Generic.List[hashtable]'
+    foreach ($t in $sorted) { $result.Add($t) | Out-Null }
+    return $result
+}
+
+# ----------------------------------------------------------------------------
+# Audit check discovery
+# ----------------------------------------------------------------------------
+
+function Discover-AuditChecks {
+    $checks = @()
+    if (-not (Test-Path $script:ChecksRoot)) { return $checks }
+
+    Get-ChildItem -Path $script:ChecksRoot -Filter "*.check.ps1" -File -ErrorAction SilentlyContinue |
+        Sort-Object Name |
+        ForEach-Object {
+            try {
+                $check = & $_.FullName
+                if ($check -is [hashtable] -and $check.ContainsKey('Test')) {
+                    if (-not $check.ContainsKey('Order')) { $check.Order = 999 }
+                    if (-not $check.ContainsKey('Label')) { $check.Label = $_.BaseName }
+                    if (-not $check.ContainsKey('Category')) { $check.Category = "General" }
+                    $check.SourcePath = $_.FullName
+                    $checks += $check
+                }
+            }
+            catch {
+                # Bad check file, skip silently
+            }
+        }
+
+    return @($checks | Sort-Object @{Expression = { $_.Order }}, @{Expression = { $_.Label }})
+}
+
+# ----------------------------------------------------------------------------
+# Network helpers (unchanged)
+# ----------------------------------------------------------------------------
 
 function Read-NetworkProfiles {
     if (-not (Test-Path $script:NetworkProfilesPath)) {
@@ -67,14 +236,9 @@ function Get-AdapterByNameList {
     param([string[]]$Names)
 
     foreach ($name in $Names) {
-        if ([string]::IsNullOrWhiteSpace($name)) {
-            continue
-        }
-
+        if ([string]::IsNullOrWhiteSpace($name)) { continue }
         $adapter = Get-NetAdapter -Name $name -ErrorAction SilentlyContinue
-        if ($adapter) {
-            return $adapter
-        }
+        if ($adapter) { return $adapter }
     }
 
     return $null
@@ -83,9 +247,7 @@ function Get-AdapterByNameList {
 function Convert-PrefixLengthToMask {
     param([int]$PrefixLength)
 
-    if ($PrefixLength -lt 0 -or $PrefixLength -gt 32) {
-        return ""
-    }
+    if ($PrefixLength -lt 0 -or $PrefixLength -gt 32) { return "" }
 
     $bits = ("1" * $PrefixLength).PadRight(32, "0")
     $octets = for ($index = 0; $index -lt 4; $index++) {
@@ -97,25 +259,15 @@ function Convert-PrefixLengthToMask {
 
 function Escape-Html {
     param([string]$Text)
-
-    if ($null -eq $Text) {
-        return ""
-    }
-
+    if ($null -eq $Text) { return "" }
     return [System.Net.WebUtility]::HtmlEncode($Text)
 }
 
 function Get-LineSeverity {
     param([string]$Line)
 
-    if ($Line -match "(?i)\b(ERROR|Failed|Exception|not found|can't|cant found)\b") {
-        return "error"
-    }
-
-    if ($Line -match "(?i)\b(completed|configured|processed|copied|added|installed|removed|set|already|ready|success)\b") {
-        return "success"
-    }
-
+    if ($Line -match "(?i)\b(ERROR|Failed|Exception|not found|can't|cant found)\b") { return "error" }
+    if ($Line -match "(?i)\b(completed|configured|processed|copied|added|installed|removed|set|already|ready|success)\b") { return "success" }
     return "neutral"
 }
 
@@ -135,7 +287,6 @@ function Get-StepSummaries {
             if ($currentStep) {
                 $steps.Add([pscustomobject]$currentStep) | Out-Null
             }
-
             $currentStep = @{
                 Title   = $matches[1]
                 Status  = "success"
@@ -144,11 +295,9 @@ function Get-StepSummaries {
             continue
         }
 
-        if (-not $currentStep) {
-            continue
-        }
+        if (-not $currentStep) { continue }
 
-        if (Get-LineSeverity $cleanLine -eq "error") {
+        if ((Get-LineSeverity $cleanLine) -eq "error") {
             $currentStep.Status = "error"
         }
 
@@ -241,16 +390,28 @@ function Get-NetworkSnapshots {
     return @(Read-NetworkProfiles | ForEach-Object { Get-NetworkSnapshot -Profile $_ })
 }
 
+# ----------------------------------------------------------------------------
+# Boot - elevation + discovery
+# ----------------------------------------------------------------------------
+
 Ensure-Elevated
+Load-State
+$script:Tasks = Discover-Tasks
+foreach ($t in $script:Tasks) { $script:TasksByKey[$t.Key] = $t }
+$script:AuditChecks = Discover-AuditChecks
+
+# ----------------------------------------------------------------------------
+# XAML
+# ----------------------------------------------------------------------------
 
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Rutherford Assistant"
-        Width="1220"
-        Height="860"
+        Width="1280"
+        Height="900"
         MinWidth="1080"
-        MinHeight="760"
+        MinHeight="780"
         WindowStartupLocation="CenterScreen"
         Background="#050505"
         Foreground="#F4F4F5"
@@ -288,11 +449,12 @@ Ensure-Elevated
                        Text="Rutherford Assistant"
                        FontSize="30"
                        FontWeight="Bold" />
-            <TextBlock Margin="0,10,0,0"
+            <TextBlock Name="HeroSubtitle"
+                       Margin="0,10,0,0"
                        Foreground="#B3B3BC"
                        FontSize="14"
                        TextWrapping="Wrap"
-                       Text="Windows launcher designed for a packaged EXE workflow. Keep the interface open while scripts run." />
+                       Text="Portable Windows launcher. The window stays open while scripts run." />
           </StackPanel>
 
           <Border Grid.Column="1"
@@ -308,7 +470,7 @@ Ensure-Elevated
               <TextBlock Margin="0,10,0,0"
                          Foreground="#B3B3BC"
                          TextWrapping="Wrap"
-                         Text="1. Open the launcher EXE.&#x0a;2. Run Setup or Network.&#x0a;3. Watch live logs.&#x0a;4. Open the HTML report when the task finishes." />
+                         Text="1. Open the launcher.&#x0a;2. Click an action button.&#x0a;3. Watch live logs.&#x0a;4. Open the HTML report when finished." />
             </StackPanel>
           </Border>
         </Grid>
@@ -316,7 +478,7 @@ Ensure-Elevated
 
       <Grid Grid.Row="2">
         <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="360" />
+          <ColumnDefinition Width="380" />
           <ColumnDefinition Width="18" />
           <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
@@ -332,90 +494,13 @@ Ensure-Elevated
                        Foreground="#111111"
                        FontSize="20"
                        FontWeight="Bold" />
+            <TextBlock Name="ActionsHelpText"
+                       Margin="0,6,0,0"
+                       Foreground="#52525B"
+                       TextWrapping="Wrap"
+                       Text="One button per script discovered in assets." />
 
-            <Grid Margin="0,16,0,0">
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="120" />
-              </Grid.ColumnDefinitions>
-              <Button Name="SetupButton"
-                      Grid.Column="0"
-                      Height="50"
-                      FontWeight="Bold"
-                      Background="#111111"
-                      Foreground="#FFFFFF"
-                      BorderThickness="0"
-                      Content="Run Setup" />
-              <Border Name="SetupStatusBorder"
-                      Grid.Column="1"
-                      Margin="12,0,0,0"
-                      CornerRadius="12"
-                      Background="#E5E7EB"
-                      Padding="10,0">
-                <TextBlock Name="SetupStatusText"
-                           VerticalAlignment="Center"
-                           HorizontalAlignment="Center"
-                           FontWeight="Bold"
-                           Text="Not done" />
-              </Border>
-            </Grid>
-
-            <Grid Margin="0,12,0,0">
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="120" />
-              </Grid.ColumnDefinitions>
-              <Button Name="NetworkButton"
-                      Grid.Column="0"
-                      Height="50"
-                      FontWeight="Bold"
-                      Background="#F3F4F6"
-                      Foreground="#111111"
-                      BorderBrush="#E5E7EB"
-                      BorderThickness="1"
-                      Content="Run Network" />
-              <Border Name="NetworkStatusBorder"
-                      Grid.Column="1"
-                      Margin="12,0,0,0"
-                      CornerRadius="12"
-                      Background="#E5E7EB"
-                      Padding="10,0">
-                <TextBlock Name="NetworkStatusText"
-                           VerticalAlignment="Center"
-                           HorizontalAlignment="Center"
-                           FontWeight="Bold"
-                           Text="Not done" />
-              </Border>
-            </Grid>
-
-            <Grid Margin="0,12,0,0">
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="120" />
-              </Grid.ColumnDefinitions>
-              <Button Name="UpdatesButton"
-                      Grid.Column="0"
-                      Height="50"
-                      FontWeight="Bold"
-                      Background="#F3F4F6"
-                      Foreground="#A1A1AA"
-                      BorderBrush="#E5E7EB"
-                      BorderThickness="1"
-                      IsEnabled="False"
-                      Content="Run Updates" />
-              <Border Name="UpdatesStatusBorder"
-                      Grid.Column="1"
-                      Margin="12,0,0,0"
-                      CornerRadius="12"
-                      Background="#E5E7EB"
-                      Padding="10,0">
-                <TextBlock Name="UpdatesStatusText"
-                           VerticalAlignment="Center"
-                           HorizontalAlignment="Center"
-                           FontWeight="Bold"
-                           Text="Not done" />
-              </Border>
-            </Grid>
+            <StackPanel Name="ActionsPanel" Margin="0,16,0,0" />
 
             <Button Name="OpenReportButton"
                     Margin="0,22,0,0"
@@ -438,6 +523,16 @@ Ensure-Elevated
                     BorderThickness="1"
                     Content="Refresh Network Status" />
 
+            <Button Name="RefreshAuditButton"
+                    Margin="0,10,0,0"
+                    Height="40"
+                    FontWeight="Bold"
+                    Background="#FFFFFF"
+                    Foreground="#111111"
+                    BorderBrush="#E5E7EB"
+                    BorderThickness="1"
+                    Content="Refresh LaRoche Audit" />
+
             <Button Name="ClearLogsButton"
                     Margin="0,10,0,0"
                     Height="40"
@@ -457,6 +552,17 @@ Ensure-Elevated
                        Foreground="#52525B"
                        TextWrapping="Wrap"
                        Text="No report yet." />
+
+            <TextBlock Margin="0,16,0,0"
+                       Foreground="#111111"
+                       FontWeight="Bold"
+                       Text="State File" />
+            <TextBlock Name="StateFileText"
+                       Margin="0,6,0,0"
+                       Foreground="#52525B"
+                       FontSize="11"
+                       TextWrapping="Wrap"
+                       Text="" />
           </StackPanel>
         </Border>
 
@@ -466,7 +572,9 @@ Ensure-Elevated
             <RowDefinition Height="18" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="18" />
-            <RowDefinition Height="430" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="18" />
+            <RowDefinition Height="380" />
           </Grid.RowDefinitions>
 
           <Border Grid.Row="0"
@@ -503,12 +611,19 @@ Ensure-Elevated
                       CornerRadius="18"
                       Padding="14">
                 <StackPanel>
-                  <TextBlock Text="EXE Target"
+                  <TextBlock Text="Computer"
                              FontWeight="Bold" />
-                  <TextBlock Margin="0,8,0,0"
+                  <TextBlock Name="ComputerNameText"
+                             Margin="0,8,0,0"
                              Foreground="#B3B3BC"
                              TextWrapping="Wrap"
-                             Text="The final goal is a clean Windows EXE launcher that opens this UI and keeps it visible while scripts run." />
+                             Text="" />
+                  <TextBlock Name="LastUpdatedText"
+                             Margin="0,8,0,0"
+                             Foreground="#71717A"
+                             FontSize="11"
+                             TextWrapping="Wrap"
+                             Text="" />
                 </StackPanel>
               </Border>
             </Grid>
@@ -521,10 +636,22 @@ Ensure-Elevated
                   CornerRadius="22"
                   Padding="20">
             <StackPanel>
-              <TextBlock Text="Network Cards"
-                         Foreground="#111111"
-                         FontSize="20"
-                         FontWeight="Bold" />
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0"
+                           Text="Network Cards"
+                           Foreground="#111111"
+                           FontSize="20"
+                           FontWeight="Bold" />
+                <TextBlock Grid.Column="1"
+                           Name="NetworkSummaryText"
+                           VerticalAlignment="Center"
+                           Foreground="#52525B"
+                           Text="" />
+              </Grid>
               <TextBlock Margin="0,8,0,0"
                          Foreground="#52525B"
                          Text="Name, IP and mask must match Network.ps1 expectations." />
@@ -534,6 +661,37 @@ Ensure-Elevated
           </Border>
 
           <Border Grid.Row="4"
+                  Background="#FFFFFF"
+                  BorderBrush="#E5E7EB"
+                  BorderThickness="1"
+                  CornerRadius="22"
+                  Padding="20">
+            <StackPanel>
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0"
+                           Text="LaRoche Audit"
+                           Foreground="#111111"
+                           FontSize="20"
+                           FontWeight="Bold" />
+                <TextBlock Grid.Column="1"
+                           Name="AuditSummaryText"
+                           VerticalAlignment="Center"
+                           Foreground="#52525B"
+                           Text="" />
+              </Grid>
+              <TextBlock Margin="0,8,0,0"
+                         Foreground="#52525B"
+                         Text="Verifies that every modification expected from LaRoche.ps1 is actually applied on this machine." />
+              <StackPanel Name="AuditChecksPanel"
+                          Margin="0,16,0,0" />
+            </StackPanel>
+          </Border>
+
+          <Border Grid.Row="6"
                   Background="#0B0B0C"
                   BorderBrush="#232326"
                   BorderThickness="1"
@@ -573,7 +731,7 @@ Ensure-Elevated
               Padding="16">
         <TextBlock Foreground="#B3B3BC"
                    TextWrapping="Wrap"
-                   Text="Reports are generated as HTML with green and red status cards. Network expectations come from assets\config\network-profiles.json so the UI and Network.ps1 stay in sync." />
+                   Text="Reports are saved next to the launcher in the reports folder. Network expectations come from assets\config\network-profiles.json. Audit checks live in assets\checks and can be added or modified without rebuilding the EXE." />
       </Border>
     </Grid>
   </ScrollViewer>
@@ -583,117 +741,203 @@ Ensure-Elevated
 $reader = New-Object System.Xml.XmlNodeReader $xaml
 $window = [Windows.Markup.XamlReader]::Load($reader)
 
-$setupButton = $window.FindName("SetupButton")
-$networkButton = $window.FindName("NetworkButton")
-$updatesButton = $window.FindName("UpdatesButton")
-$openReportButton = $window.FindName("OpenReportButton")
+$actionsPanel        = $window.FindName("ActionsPanel")
+$openReportButton    = $window.FindName("OpenReportButton")
 $refreshNetworkButton = $window.FindName("RefreshNetworkButton")
-$clearLogsButton = $window.FindName("ClearLogsButton")
-$setupStatusBorder = $window.FindName("SetupStatusBorder")
-$setupStatusText = $window.FindName("SetupStatusText")
-$networkStatusBorder = $window.FindName("NetworkStatusBorder")
-$networkStatusText = $window.FindName("NetworkStatusText")
-$updatesStatusBorder = $window.FindName("UpdatesStatusBorder")
-$updatesStatusText = $window.FindName("UpdatesStatusText")
-$currentTaskText = $window.FindName("CurrentTaskText")
-$currentStatusText = $window.FindName("CurrentStatusText")
-$reportSummaryText = $window.FindName("ReportSummaryText")
-$logsListBox = $window.FindName("LogsListBox")
-$networkCardsPanel = $window.FindName("NetworkCardsPanel")
+$refreshAuditButton  = $window.FindName("RefreshAuditButton")
+$clearLogsButton     = $window.FindName("ClearLogsButton")
+$currentTaskText     = $window.FindName("CurrentTaskText")
+$currentStatusText   = $window.FindName("CurrentStatusText")
+$reportSummaryText   = $window.FindName("ReportSummaryText")
+$stateFileText       = $window.FindName("StateFileText")
+$logsListBox         = $window.FindName("LogsListBox")
+$networkCardsPanel   = $window.FindName("NetworkCardsPanel")
+$networkSummaryText  = $window.FindName("NetworkSummaryText")
+$auditChecksPanel    = $window.FindName("AuditChecksPanel")
+$auditSummaryText    = $window.FindName("AuditSummaryText")
+$computerNameText    = $window.FindName("ComputerNameText")
+$lastUpdatedText     = $window.FindName("LastUpdatedText")
+$actionsHelpText     = $window.FindName("ActionsHelpText")
 
 $logsListBox.ItemsSource = $script:LogItems
+$computerNameText.Text   = $env:COMPUTERNAME
+$stateFileText.Text      = $script:StateFilePath
 
-$taskMap = @{
-    setup = @{
-        Label  = "Setup Rutherford"
-        Script = Join-Path $script:AssetsRoot "LaRoche.ps1"
-    }
-    network = @{
-        Label  = "Network Rutherford"
-        Script = Join-Path $script:AssetsRoot "Network.ps1"
-    }
+# ----------------------------------------------------------------------------
+# Color helpers
+# ----------------------------------------------------------------------------
+
+function Get-Brush {
+    param([string]$Hex)
+    return [System.Windows.Media.BrushConverter]::new().ConvertFromString($Hex)
 }
 
-function Set-Status {
-    param(
-        [string]$TaskText,
-        [string]$StatusText
-    )
+# ----------------------------------------------------------------------------
+# Status / log helpers
+# ----------------------------------------------------------------------------
 
+function Set-Status {
+    param([string]$TaskText, [string]$StatusText)
     $currentTaskText.Text = $TaskText
     $currentStatusText.Text = $StatusText
 }
 
-function Set-ActionState {
-    param(
-        [string]$TaskKey,
-        [string]$State
-    )
-
-    $script:ActionState[$TaskKey] = $State
-
-    switch ($TaskKey) {
-        "setup" {
-            $targetBorder = $setupStatusBorder
-            $targetText = $setupStatusText
-        }
-        "network" {
-            $targetBorder = $networkStatusBorder
-            $targetText = $networkStatusText
-        }
-        "updates" {
-            $targetBorder = $updatesStatusBorder
-            $targetText = $updatesStatusText
-        }
-        default { return }
-    }
+function Apply-StatusVisual {
+    param($Border, $Text, [string]$State)
 
     switch ($State) {
         "Running" {
-            $targetBorder.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#FEF3C7")
-            $targetText.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#92400E")
+            $Border.Background = Get-Brush "#FEF3C7"
+            $Text.Foreground   = Get-Brush "#92400E"
         }
         "Done" {
-            $targetBorder.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#DCFCE7")
-            $targetText.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#166534")
+            $Border.Background = Get-Brush "#DCFCE7"
+            $Text.Foreground   = Get-Brush "#166534"
         }
         "Error" {
-            $targetBorder.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#FEE2E2")
-            $targetText.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#B91C1C")
+            $Border.Background = Get-Brush "#FEE2E2"
+            $Text.Foreground   = Get-Brush "#B91C1C"
         }
         default {
-            $targetBorder.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#E5E7EB")
-            $targetText.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#374151")
+            $Border.Background = Get-Brush "#E5E7EB"
+            $Text.Foreground   = Get-Brush "#374151"
         }
     }
+    $Text.Text = $State
+}
 
-    $targetText.Text = $State
+function Set-ActionState {
+    param([string]$Key, [string]$State)
+
+    if (-not $script:TasksByKey.ContainsKey($Key)) { return }
+    $task = $script:TasksByKey[$Key]
+    if (-not $task.StatusBorder -or -not $task.StatusText) { return }
+
+    Apply-StatusVisual -Border $task.StatusBorder -Text $task.StatusText -State $State
 }
 
 function Append-LogLine {
     param([string]$Line)
 
-    if ([string]::IsNullOrWhiteSpace($Line)) {
-        return
-    }
+    if ([string]::IsNullOrWhiteSpace($Line)) { return }
 
     $timestampedLine = "[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Line.TrimEnd()
     $script:CurrentLogLines.Add($timestampedLine) | Out-Null
     $script:LogItems.Add($timestampedLine)
-    $logsListBox.ScrollIntoView($timestampedLine)
+    try { $logsListBox.ScrollIntoView($timestampedLine) } catch { }
 }
 
 function Set-ControlsBusyState {
     param([bool]$Busy)
 
     $script:IsBusy = $Busy
-    $setupButton.IsEnabled = -not $Busy
-    $networkButton.IsEnabled = -not $Busy
+    foreach ($task in $script:Tasks) {
+        if ($task.Button) { $task.Button.IsEnabled = -not $Busy }
+    }
     $refreshNetworkButton.IsEnabled = -not $Busy
-    $clearLogsButton.IsEnabled = -not $Busy
-    $updatesButton.IsEnabled = $false
-    $openReportButton.IsEnabled = (-not $Busy) -and [bool]$script:LastReportPath
+    $refreshAuditButton.IsEnabled   = -not $Busy
+    $clearLogsButton.IsEnabled      = -not $Busy
+    $openReportButton.IsEnabled     = (-not $Busy) -and [bool]$script:LastReportPath
 }
+
+# ----------------------------------------------------------------------------
+# Action button construction
+# ----------------------------------------------------------------------------
+
+function Build-ActionButtons {
+    $actionsPanel.Children.Clear()
+
+    if ($script:Tasks.Count -eq 0) {
+        $emptyText = New-Object System.Windows.Controls.TextBlock
+        $emptyText.Text = "No script manifest found in assets. Drop a *.ps1 file plus a *.manifest.json next to it to add a button."
+        $emptyText.Foreground = Get-Brush "#B91C1C"
+        $emptyText.TextWrapping = "Wrap"
+        [void]$actionsPanel.Children.Add($emptyText)
+        return
+    }
+
+    $actionsHelpText.Text = "$($script:Tasks.Count) script(s) discovered in assets."
+
+    $first = $true
+    foreach ($task in $script:Tasks) {
+        $row = New-Object System.Windows.Controls.Grid
+        if (-not $first) { $row.Margin = [System.Windows.Thickness]::new(0, 12, 0, 0) }
+
+        $colMain = New-Object System.Windows.Controls.ColumnDefinition
+        [void]$row.ColumnDefinitions.Add($colMain)
+        $colStatus = New-Object System.Windows.Controls.ColumnDefinition
+        $colStatus.Width = [System.Windows.GridLength]::new(120)
+        [void]$row.ColumnDefinitions.Add($colStatus)
+
+        $button = New-Object System.Windows.Controls.Button
+        $button.Height = 50
+        $button.FontWeight = "Bold"
+        $button.Content = $task.Label
+        if ($task.Primary) {
+            $button.Background = Get-Brush "#111111"
+            $button.Foreground = Get-Brush "#FFFFFF"
+            $button.BorderThickness = [System.Windows.Thickness]::new(0)
+        }
+        else {
+            $button.Background = Get-Brush "#F3F4F6"
+            $button.Foreground = Get-Brush "#111111"
+            $button.BorderBrush = Get-Brush "#E5E7EB"
+            $button.BorderThickness = [System.Windows.Thickness]::new(1)
+        }
+        if ($task.Description) {
+            $button.ToolTip = $task.Description
+        }
+        [System.Windows.Controls.Grid]::SetColumn($button, 0)
+        [void]$row.Children.Add($button)
+
+        $statusBorder = New-Object System.Windows.Controls.Border
+        $statusBorder.Margin = [System.Windows.Thickness]::new(12, 0, 0, 0)
+        $statusBorder.CornerRadius = [System.Windows.CornerRadius]::new(12)
+        $statusBorder.Background = Get-Brush "#E5E7EB"
+        $statusBorder.Padding = [System.Windows.Thickness]::new(10, 0, 10, 0)
+        [System.Windows.Controls.Grid]::SetColumn($statusBorder, 1)
+
+        $statusText = New-Object System.Windows.Controls.TextBlock
+        $statusText.VerticalAlignment   = "Center"
+        $statusText.HorizontalAlignment = "Center"
+        $statusText.FontWeight          = "Bold"
+        $statusText.Text                = "Not done"
+        $statusBorder.Child             = $statusText
+        [void]$row.Children.Add($statusBorder)
+
+        $task.Button       = $button
+        $task.StatusBorder = $statusBorder
+        $task.StatusText   = $statusText
+
+        # Restore persisted state if any
+        $persistedState = "Not done"
+        if ($script:State.scripts -and $script:State.scripts.ContainsKey($task.Key)) {
+            $persistedState = [string]$script:State.scripts[$task.Key].status
+            if ([string]::IsNullOrWhiteSpace($persistedState)) { $persistedState = "Not done" }
+        }
+        Apply-StatusVisual -Border $statusBorder -Text $statusText -State $persistedState
+
+        $taskKey = $task.Key
+        $button.Add_Click({
+            param($sender, $e)
+            try {
+                Start-TaskExecution -TaskKey $taskKey
+            }
+            catch {
+                Append-LogLine ("Launcher error: " + $_.Exception.Message)
+                Set-Status -TaskText "Launcher error" -StatusText $_.Exception.Message
+                Set-ControlsBusyState -Busy $false
+            }
+        }.GetNewClosure())
+
+        [void]$actionsPanel.Children.Add($row)
+        $first = $false
+    }
+}
+
+# ----------------------------------------------------------------------------
+# Network card rendering
+# ----------------------------------------------------------------------------
 
 function Add-NetworkCardElement {
     param($Snapshot)
@@ -703,8 +947,8 @@ function Add-NetworkCardElement {
     $border.BorderThickness = [System.Windows.Thickness]::new(1)
     $border.Padding = [System.Windows.Thickness]::new(14)
     $border.Margin = [System.Windows.Thickness]::new(0, 0, 0, 10)
-    $border.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#FAFAFA")
-    $border.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#E5E7EB")
+    $border.Background = Get-Brush "#FAFAFA"
+    $border.BorderBrush = Get-Brush "#E5E7EB"
 
     $stack = New-Object System.Windows.Controls.StackPanel
     $border.Child = $stack
@@ -720,7 +964,7 @@ function Add-NetworkCardElement {
     $nameText.Text = $Snapshot.Name
     $nameText.FontWeight = "Bold"
     $nameText.FontSize = 16
-    $nameText.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#111111")
+    $nameText.Foreground = Get-Brush "#111111"
     [System.Windows.Controls.Grid]::SetColumn($nameText, 0)
     [void]$headerGrid.Children.Add($nameText)
 
@@ -729,18 +973,18 @@ function Add-NetworkCardElement {
     $statusBorder.Padding = [System.Windows.Thickness]::new(10, 4, 10, 4)
     $statusBorder.HorizontalAlignment = "Right"
     if ($Snapshot.Status -eq "success") {
-        $statusBorder.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#DCFCE7")
+        $statusBorder.Background = Get-Brush "#DCFCE7"
         $statusTextColor = "#166534"
     }
     else {
-        $statusBorder.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#FEE2E2")
+        $statusBorder.Background = Get-Brush "#FEE2E2"
         $statusTextColor = "#B91C1C"
     }
 
     $statusText = New-Object System.Windows.Controls.TextBlock
     $statusText.Text = $Snapshot.StatusText
     $statusText.FontWeight = "Bold"
-    $statusText.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString($statusTextColor)
+    $statusText.Foreground = Get-Brush $statusTextColor
     $statusBorder.Child = $statusText
     [System.Windows.Controls.Grid]::SetColumn($statusBorder, 1)
     [void]$headerGrid.Children.Add($statusBorder)
@@ -759,7 +1003,7 @@ function Add-NetworkCardElement {
         $text = New-Object System.Windows.Controls.TextBlock
         $text.Text = $line
         $text.Margin = [System.Windows.Thickness]::new(0, 2, 0, 0)
-        $text.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#52525B")
+        $text.Foreground = Get-Brush "#52525B"
         [void]$stack.Children.Add($text)
     }
 
@@ -769,18 +1013,169 @@ function Add-NetworkCardElement {
 function Refresh-NetworkCards {
     try {
         $networkCardsPanel.Children.Clear()
-        foreach ($snapshot in Get-NetworkSnapshots) {
+        $snapshots = @(Get-NetworkSnapshots)
+        $okCount = 0
+        foreach ($snapshot in $snapshots) {
+            if ($snapshot.Status -eq "success") { $okCount++ }
             Add-NetworkCardElement -Snapshot $snapshot
         }
+        $networkSummaryText.Text = "$okCount / $($snapshots.Count) OK"
     }
     catch {
         $networkCardsPanel.Children.Clear()
         $errorText = New-Object System.Windows.Controls.TextBlock
         $errorText.Text = "Unable to read network status: $($_.Exception.Message)"
-        $errorText.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#B91C1C")
+        $errorText.Foreground = Get-Brush "#B91C1C"
         [void]$networkCardsPanel.Children.Add($errorText)
+        $networkSummaryText.Text = "Error"
     }
 }
+
+# ----------------------------------------------------------------------------
+# Audit panel rendering
+# ----------------------------------------------------------------------------
+
+function Get-AuditStatusVisual {
+    param([string]$Status)
+
+    switch ($Status) {
+        "ok"      { return @{ Bg = "#DCFCE7"; Fg = "#166534"; Label = "OK" } }
+        "missing" { return @{ Bg = "#FEE2E2"; Fg = "#B91C1C"; Label = "Missing" } }
+        "partial" { return @{ Bg = "#FEF3C7"; Fg = "#92400E"; Label = "Partial" } }
+        "unknown" { return @{ Bg = "#E5E7EB"; Fg = "#374151"; Label = "Unknown" } }
+        default   { return @{ Bg = "#E5E7EB"; Fg = "#374151"; Label = "Unknown" } }
+    }
+}
+
+function Add-AuditCardElement {
+    param($Check, $Result)
+
+    $visual = Get-AuditStatusVisual -Status $Result.Status
+
+    $border = New-Object System.Windows.Controls.Border
+    $border.CornerRadius = [System.Windows.CornerRadius]::new(14)
+    $border.BorderThickness = [System.Windows.Thickness]::new(1)
+    $border.Padding = [System.Windows.Thickness]::new(14, 10, 14, 10)
+    $border.Margin = [System.Windows.Thickness]::new(0, 0, 0, 8)
+    $border.Background = Get-Brush "#FAFAFA"
+    $border.BorderBrush = Get-Brush "#E5E7EB"
+
+    $grid = New-Object System.Windows.Controls.Grid
+    $border.Child = $grid
+
+    $colMain = New-Object System.Windows.Controls.ColumnDefinition
+    [void]$grid.ColumnDefinitions.Add($colMain)
+    $colStatus = New-Object System.Windows.Controls.ColumnDefinition
+    $colStatus.Width = [System.Windows.GridLength]::new(96)
+    [void]$grid.ColumnDefinitions.Add($colStatus)
+
+    $textStack = New-Object System.Windows.Controls.StackPanel
+    [System.Windows.Controls.Grid]::SetColumn($textStack, 0)
+
+    $labelText = New-Object System.Windows.Controls.TextBlock
+    $labelText.Text = $Check.Label
+    $labelText.FontWeight = "Bold"
+    $labelText.FontSize = 14
+    $labelText.Foreground = Get-Brush "#111111"
+    [void]$textStack.Children.Add($labelText)
+
+    $detailText = New-Object System.Windows.Controls.TextBlock
+    $detailText.Text = if ($Result.Detail) { [string]$Result.Detail } else { "" }
+    $detailText.Margin = [System.Windows.Thickness]::new(0, 4, 0, 0)
+    $detailText.Foreground = Get-Brush "#52525B"
+    $detailText.TextWrapping = "Wrap"
+    [void]$textStack.Children.Add($detailText)
+
+    $categoryText = New-Object System.Windows.Controls.TextBlock
+    $categoryText.Text = "Category: $($Check.Category)"
+    $categoryText.Margin = [System.Windows.Thickness]::new(0, 4, 0, 0)
+    $categoryText.Foreground = Get-Brush "#A1A1AA"
+    $categoryText.FontSize = 11
+    [void]$textStack.Children.Add($categoryText)
+
+    [void]$grid.Children.Add($textStack)
+
+    $statusBorder = New-Object System.Windows.Controls.Border
+    $statusBorder.CornerRadius = [System.Windows.CornerRadius]::new(10)
+    $statusBorder.Padding = [System.Windows.Thickness]::new(10, 4, 10, 4)
+    $statusBorder.HorizontalAlignment = "Right"
+    $statusBorder.VerticalAlignment   = "Center"
+    $statusBorder.Background = Get-Brush $visual.Bg
+
+    $statusText = New-Object System.Windows.Controls.TextBlock
+    $statusText.Text = $visual.Label
+    $statusText.FontWeight = "Bold"
+    $statusText.Foreground = Get-Brush $visual.Fg
+    $statusBorder.Child = $statusText
+
+    [System.Windows.Controls.Grid]::SetColumn($statusBorder, 1)
+    [void]$grid.Children.Add($statusBorder)
+
+    [void]$auditChecksPanel.Children.Add($border)
+}
+
+function Refresh-AuditPanel {
+    try {
+        $auditChecksPanel.Children.Clear()
+
+        if (-not $script:AuditChecks -or $script:AuditChecks.Count -eq 0) {
+            $emptyText = New-Object System.Windows.Controls.TextBlock
+            $emptyText.Text = "No audit check found in assets\checks. Drop a *.check.ps1 file there to add one."
+            $emptyText.Foreground = Get-Brush "#52525B"
+            $emptyText.TextWrapping = "Wrap"
+            [void]$auditChecksPanel.Children.Add($emptyText)
+            $auditSummaryText.Text = "0 checks"
+            return
+        }
+
+        $okCount = 0
+        $missingCount = 0
+        $partialCount = 0
+        $unknownCount = 0
+
+        foreach ($check in $script:AuditChecks) {
+            $result = $null
+            try {
+                $result = & $check.Test
+            }
+            catch {
+                $result = @{ Status = "unknown"; Detail = "Check error: $($_.Exception.Message)" }
+            }
+
+            if (-not ($result -is [hashtable]) -or -not $result.ContainsKey('Status')) {
+                $result = @{ Status = "unknown"; Detail = "Check returned no status" }
+            }
+
+            switch ([string]$result.Status) {
+                "ok"      { $okCount++ }
+                "missing" { $missingCount++ }
+                "partial" { $partialCount++ }
+                default   { $unknownCount++ }
+            }
+
+            Add-AuditCardElement -Check $check -Result $result
+        }
+
+        $total = $script:AuditChecks.Count
+        $parts = @("$okCount / $total OK")
+        if ($missingCount -gt 0) { $parts += "$missingCount missing" }
+        if ($partialCount -gt 0) { $parts += "$partialCount partial" }
+        if ($unknownCount -gt 0) { $parts += "$unknownCount unknown" }
+        $auditSummaryText.Text = ($parts -join " · ")
+    }
+    catch {
+        $auditChecksPanel.Children.Clear()
+        $errorText = New-Object System.Windows.Controls.TextBlock
+        $errorText.Text = "Unable to run audit: $($_.Exception.Message)"
+        $errorText.Foreground = Get-Brush "#B91C1C"
+        [void]$auditChecksPanel.Children.Add($errorText)
+        $auditSummaryText.Text = "Error"
+    }
+}
+
+# ----------------------------------------------------------------------------
+# Reports
+# ----------------------------------------------------------------------------
 
 function Get-ReportFilePath {
     param([string]$TaskName)
@@ -855,22 +1250,19 @@ function Convert-LogsToHtml {
 }
 
 function Write-RunReport {
-    param(
-        [string]$TaskName,
-        [string]$ScriptPath,
-        [int]$ExitCode
-    )
+    param([string]$TaskName, [string]$ScriptPath, [int]$ExitCode)
 
-    $reportPath = Get-ReportFilePath -TaskName $TaskName
-    $finishedAt = Get-Date
-    $duration = [int][Math]::Round(($finishedAt - $script:RunStartedAt).TotalSeconds)
-    $statusLabel = if ($ExitCode -eq 0) { "Done" } else { "Error" }
-    $statusClass = if ($ExitCode -eq 0) { "step-success" } else { "step-error" }
-    $stepHtml = Convert-StepSummariesToHtml -StepSummaries (Get-StepSummaries -Lines $script:CurrentLogLines.ToArray() -ExitCode $ExitCode)
-    $networkHtml = Convert-NetworkSnapshotsToHtml -Snapshots (Get-NetworkSnapshots)
-    $logsHtml = Convert-LogsToHtml
+    try {
+        $reportPath = Get-ReportFilePath -TaskName $TaskName
+        $finishedAt = Get-Date
+        $duration = [int][Math]::Round(($finishedAt - $script:RunStartedAt).TotalSeconds)
+        $statusLabel = if ($ExitCode -eq 0) { "Done" } else { "Error" }
+        $statusClass = if ($ExitCode -eq 0) { "step-success" } else { "step-error" }
+        $stepHtml = Convert-StepSummariesToHtml -StepSummaries (Get-StepSummaries -Lines $script:CurrentLogLines.ToArray() -ExitCode $ExitCode)
+        $networkHtml = Convert-NetworkSnapshotsToHtml -Snapshots (Get-NetworkSnapshots)
+        $logsHtml = Convert-LogsToHtml
 
-    $html = @"
+        $html = @"
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -971,28 +1363,36 @@ function Write-RunReport {
 </html>
 "@
 
-    Set-Content -Path $reportPath -Value $html -Encoding UTF8
-    $script:LastReportPath = $reportPath
-    $reportSummaryText.Text = $reportPath
-    $openReportButton.IsEnabled = $true
-    return $reportPath
+        Set-Content -Path $reportPath -Value $html -Encoding UTF8
+        $script:LastReportPath = $reportPath
+        $reportSummaryText.Text = $reportPath
+        $openReportButton.IsEnabled = $true
+        return $reportPath
+    }
+    catch {
+        Append-LogLine ("Report generation failed: " + $_.Exception.Message)
+        return $null
+    }
 }
+
+# ----------------------------------------------------------------------------
+# Task execution
+# ----------------------------------------------------------------------------
 
 function Start-TaskExecution {
     param([string]$TaskKey)
 
-    if ($script:IsBusy) {
+    if ($script:IsBusy) { return }
+
+    if (-not $script:TasksByKey.ContainsKey($TaskKey)) {
+        [System.Windows.MessageBox]::Show("Unknown task: $TaskKey", "Rutherford Assistant") | Out-Null
         return
     }
 
-    $task = $taskMap[$TaskKey]
-    if (-not $task) {
-        [System.Windows.MessageBox]::Show("Unknown task: $TaskKey", "Rutherford Assistant")
-        return
-    }
+    $task = $script:TasksByKey[$TaskKey]
 
-    if (-not (Test-Path $task.Script)) {
-        [System.Windows.MessageBox]::Show("Missing script: $($task.Script)", "Rutherford Assistant")
+    if (-not (Test-Path $task.ScriptPath)) {
+        [System.Windows.MessageBox]::Show("Missing script: $($task.ScriptPath)", "Rutherford Assistant") | Out-Null
         return
     }
 
@@ -1002,20 +1402,21 @@ function Start-TaskExecution {
     $reportSummaryText.Text = "Report will be generated when the task finishes."
     $openReportButton.IsEnabled = $false
     $script:CurrentTask = $task
+    $script:CurrentTaskKey = $TaskKey
     $script:RunStartedAt = Get-Date
 
-    Set-ActionState -TaskKey $TaskKey -State "Running"
+    Set-ActionState -Key $TaskKey -State "Running"
     Set-ControlsBusyState -Busy $true
     Set-Status -TaskText $task.Label -StatusText "Running... keep this window open."
 
     Append-LogLine "Launcher root: $script:AppRoot"
     Append-LogLine "Assets root: $script:AssetsRoot"
     Append-LogLine "Starting task: $($task.Label)"
-    Append-LogLine "Script: $($task.Script)"
+    Append-LogLine "Script: $($task.ScriptPath)"
 
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
     $startInfo.FileName = "powershell.exe"
-    $startInfo.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$($task.Script)`""
+    $startInfo.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$($task.ScriptPath)`""
     $startInfo.WorkingDirectory = $script:AssetsRoot
     $startInfo.UseShellExecute = $false
     $startInfo.RedirectStandardOutput = $true
@@ -1029,78 +1430,121 @@ function Start-TaskExecution {
     $process.add_OutputDataReceived({
         param($sender, $eventArgs)
         if ($null -ne $eventArgs.Data) {
-            $window.Dispatcher.Invoke([action]{
-                Append-LogLine $eventArgs.Data
-            })
+            try {
+                $window.Dispatcher.Invoke([action]{ Append-LogLine $eventArgs.Data })
+            }
+            catch { }
         }
     })
 
     $process.add_ErrorDataReceived({
         param($sender, $eventArgs)
         if ($null -ne $eventArgs.Data) {
-            $window.Dispatcher.Invoke([action]{
-                Append-LogLine ("ERROR: " + $eventArgs.Data)
-            })
+            try {
+                $window.Dispatcher.Invoke([action]{ Append-LogLine ("ERROR: " + $eventArgs.Data) })
+            }
+            catch { }
         }
     })
 
     $process.add_Exited({
         param($sender, $eventArgs)
 
-        $window.Dispatcher.Invoke([action]{
-            try {
-                $exitCode = $sender.ExitCode
-                Append-LogLine ("Process finished with exit code " + $exitCode)
-                $reportPath = Write-RunReport -TaskName $script:CurrentTask.Label -ScriptPath $script:CurrentTask.Script -ExitCode $exitCode
-                $finalState = if ($exitCode -eq 0) { "Done" } else { "Error" }
-                Set-ActionState -TaskKey $script:CurrentTask.Label.ToLower().Split(" ")[0] -State $finalState
-                Set-ControlsBusyState -Busy $false
-                if ($exitCode -eq 0) {
-                    Set-Status -TaskText $script:CurrentTask.Label -StatusText "Done. Report saved to $reportPath"
+        try {
+            $window.Dispatcher.Invoke([action]{
+                try {
+                    $exitCode = -1
+                    try { $exitCode = $sender.ExitCode } catch { }
+                    Append-LogLine ("Process finished with exit code " + $exitCode)
+
+                    $finalState = if ($exitCode -eq 0) { "Done" } else { "Error" }
+                    $taskKey = $script:CurrentTaskKey
+                    $taskRef = $script:CurrentTask
+
+                    Set-ActionState -Key $taskKey -State $finalState
+                    Update-ScriptState -Key $taskKey -Status $finalState -ExitCode $exitCode
+
+                    $reportPath = Write-RunReport -TaskName $taskRef.Label -ScriptPath $taskRef.ScriptPath -ExitCode $exitCode
+                    if ($reportPath) {
+                        Set-Status -TaskText $taskRef.Label -StatusText ("$finalState. Report saved to $reportPath")
+                    }
+                    else {
+                        Set-Status -TaskText $taskRef.Label -StatusText "$finalState. (No report - see logs)"
+                    }
+
+                    Refresh-NetworkCards
+                    if ($taskRef.AuditAfterRun) {
+                        Refresh-AuditPanel
+                    }
+
+                    if ($script:State.lastUpdated) {
+                        $lastUpdatedText.Text = "Last update: $($script:State.lastUpdated)"
+                    }
                 }
-                else {
-                    Set-Status -TaskText $script:CurrentTask.Label -StatusText "Error. Report saved to $reportPath"
+                catch {
+                    Append-LogLine ("Launcher post-run error: " + $_.Exception.Message)
+                    Set-Status -TaskText "Launcher error" -StatusText $_.Exception.Message
                 }
-                Refresh-NetworkCards
-                $script:CurrentProcess = $null
-            }
-            catch {
-                Set-ControlsBusyState -Busy $false
-                Set-Status -TaskText "Launcher error" -StatusText $_.Exception.Message
-                Append-LogLine ("ERROR: " + $_.Exception.Message)
-            }
-        })
+                finally {
+                    $script:CurrentProcess = $null
+                    Set-ControlsBusyState -Busy $false
+                }
+            })
+        }
+        catch {
+            # If the dispatcher invoke itself fails (window already closed) - swallow silently
+        }
     })
 
-    $started = $process.Start()
+    try {
+        $started = $process.Start()
+    }
+    catch {
+        $started = $false
+        Append-LogLine ("Process start failed: " + $_.Exception.Message)
+    }
+
     if (-not $started) {
         Set-ControlsBusyState -Busy $false
-        Set-ActionState -TaskKey $TaskKey -State "Error"
-        [System.Windows.MessageBox]::Show("Unable to start $($task.Script)", "Rutherford Assistant")
+        Set-ActionState -Key $TaskKey -State "Error"
+        [System.Windows.MessageBox]::Show("Unable to start $($task.ScriptPath)", "Rutherford Assistant") | Out-Null
         return
     }
 
     $script:CurrentProcess = $process
-    $process.BeginOutputReadLine()
-    $process.BeginErrorReadLine()
+    try { $process.BeginOutputReadLine() } catch { Append-LogLine ("BeginOutputReadLine failed: " + $_.Exception.Message) }
+    try { $process.BeginErrorReadLine() }  catch { Append-LogLine ("BeginErrorReadLine failed: " + $_.Exception.Message) }
 }
 
-$setupButton.Add_Click({ Start-TaskExecution -TaskKey "setup" })
-$networkButton.Add_Click({ Start-TaskExecution -TaskKey "network" })
-$refreshNetworkButton.Add_Click({ Refresh-NetworkCards })
-$clearLogsButton.Add_Click({
-    if ($script:IsBusy) {
-        return
-    }
+# ----------------------------------------------------------------------------
+# Wire up buttons
+# ----------------------------------------------------------------------------
 
+Build-ActionButtons
+
+$refreshNetworkButton.Add_Click({
+    try { Refresh-NetworkCards } catch { Append-LogLine ("Refresh-NetworkCards failed: " + $_.Exception.Message) }
+})
+
+$refreshAuditButton.Add_Click({
+    try { Refresh-AuditPanel } catch { Append-LogLine ("Refresh-AuditPanel failed: " + $_.Exception.Message) }
+})
+
+$clearLogsButton.Add_Click({
+    if ($script:IsBusy) { return }
     $script:LogItems.Clear()
     $script:CurrentLogLines.Clear()
     Set-Status -TaskText "Ready" -StatusText "Waiting for action."
 })
 
 $openReportButton.Add_Click({
-    if ($script:LastReportPath -and (Test-Path $script:LastReportPath)) {
-        Start-Process -FilePath $script:LastReportPath | Out-Null
+    try {
+        if ($script:LastReportPath -and (Test-Path $script:LastReportPath)) {
+            Start-Process -FilePath $script:LastReportPath | Out-Null
+        }
+    }
+    catch {
+        Append-LogLine ("Open report failed: " + $_.Exception.Message)
     }
 })
 
@@ -1121,14 +1565,36 @@ $window.Add_Closing({
     }
 })
 
+# ----------------------------------------------------------------------------
+# Background timer for network refresh
+# ----------------------------------------------------------------------------
+
 $networkRefreshTimer = New-Object System.Windows.Threading.DispatcherTimer
 $networkRefreshTimer.Interval = [TimeSpan]::FromSeconds(5)
-$networkRefreshTimer.Add_Tick({ if (-not $script:IsBusy) { Refresh-NetworkCards } })
+$networkRefreshTimer.Add_Tick({
+    if (-not $script:IsBusy) {
+        try { Refresh-NetworkCards } catch { }
+    }
+})
 $networkRefreshTimer.Start()
 
-Set-ActionState -TaskKey "setup" -State "Not done"
-Set-ActionState -TaskKey "network" -State "Not done"
-Set-ActionState -TaskKey "updates" -State "Not done"
+# ----------------------------------------------------------------------------
+# Initial render
+# ----------------------------------------------------------------------------
+
+if ($script:State.lastUpdated) {
+    $lastUpdatedText.Text = "Last update: $($script:State.lastUpdated)"
+}
+else {
+    $lastUpdatedText.Text = "No previous run on this PC."
+}
+
 Refresh-NetworkCards
+Refresh-AuditPanel
 Set-Status -TaskText "Ready" -StatusText "Waiting for action."
-$window.ShowDialog() | Out-Null
+
+$window.Add_SourceInitialized({
+    Append-LogLine "Launcher ready. Tasks discovered: $($script:Tasks.Count). Audit checks: $($script:AuditChecks.Count)."
+})
+
+[void]$window.ShowDialog()

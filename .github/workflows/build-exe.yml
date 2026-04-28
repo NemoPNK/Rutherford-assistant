@@ -2,6 +2,11 @@ name: Build Rutherford EXE
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version string baked into the EXE"
+        required: false
+        default: "1.1.0"
   push:
     branches:
       - main
@@ -26,15 +31,53 @@ jobs:
 
       - name: Build EXE package
         shell: powershell
+        env:
+          SIGNING_PFX_BASE64:    ${{ secrets.SIGNING_PFX_BASE64 }}
+          SIGNING_PFX_PASSWORD:  ${{ secrets.SIGNING_PFX_PASSWORD }}
         run: |
-          powershell -ExecutionPolicy Bypass -File .\scripts\build-exe.ps1
+          $version = "${{ github.event.inputs.version }}"
+          if (-not $version) { $version = "1.1.0" }
+
+          $signParams = @{}
+
+          if ($env:SIGNING_PFX_BASE64) {
+              $pfxPath = Join-Path $env:RUNNER_TEMP "rutherford-signing.pfx"
+              [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
+              $signParams["SigningPfxPath"] = $pfxPath
+              if ($env:SIGNING_PFX_PASSWORD) {
+                  $signParams["SigningPfxPassword"] = $env:SIGNING_PFX_PASSWORD
+              }
+              Write-Host "Code-signing cert detected via SIGNING_PFX_BASE64."
+          }
+          else {
+              Write-Host "No SIGNING_PFX_BASE64 secret set - building unsigned EXE."
+          }
+
+          powershell -ExecutionPolicy Bypass -File .\scripts\build-exe.ps1 -Version $version @signParams
+
+      - name: Verify Authenticode signature
+        if: always()
+        shell: powershell
+        run: |
+          $exe = "dist\package\RutherfordAssistant.exe"
+          if (Test-Path $exe) {
+              $sig = Get-AuthenticodeSignature -FilePath $exe
+              Write-Host "Signature status: $($sig.Status)"
+              Write-Host "Signer: $($sig.SignerCertificate.Subject)"
+          }
+          else {
+              Write-Warning "EXE not produced; nothing to verify."
+          }
 
       - name: Upload portable package
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: RutherfordAssistant-portable
           path: |
             dist\package\RutherfordAssistant.exe
             dist\package\LaRocheLauncher.bat
+            dist\package\CONTENTS.txt
             dist\package\assets
             dist\RutherfordAssistant-portable.zip
+            dist\RutherfordAssistant-portable.sha256

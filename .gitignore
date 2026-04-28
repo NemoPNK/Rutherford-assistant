@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+._*
+.AppleDouble
+.LSOverride
+
+# Build artifacts
+dist/
+*.exe
+*.zip
+*.sha256
+
+# Reports produced at runtime
+reports/
+
+# Local launcher state
+launcher-state.json
+
+# PowerShell module download cache
+**/PowerShell/Modules/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
