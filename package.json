@@ -1,0 +1,10 @@
+{
+  "name": "rutherford-assistant",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local web interface for running Rutherford Windows preparation scripts from a Mac server.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
