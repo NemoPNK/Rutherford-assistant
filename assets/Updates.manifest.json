@@ -1,0 +1,9 @@
+{
+  "key": "updates",
+  "label": "Run Updates",
+  "description": "Search for, download and install pending Windows updates. May take a long time. A reboot may be required.",
+  "primary": false,
+  "color": "yellow",
+  "order": 30,
+  "auditAfterRun": false
+}

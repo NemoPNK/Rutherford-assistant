@@ -234,6 +234,12 @@ $script:Tasks            = New-Object 'System.Collections.Generic.List[hashtable
 $script:TasksByKey       = @{}
 $script:ButtonKeyMap     = @{}   # button ref -> task key (fallback if Tag fails under ps2exe)
 
+# Live status counters (populated by Refresh-NetworkCards / Refresh-AuditPanel)
+$script:LastNetworkOk    = 0
+$script:LastNetworkTotal = 0
+$script:LastAuditOk      = 0
+$script:LastAuditTotal   = 0
+
 # File-based output handling. The script's stdout / stderr are redirected
 # to temp files by the OS itself (via Start-Process -RedirectStandardOutput).
 # The UI thread polls these files via a DispatcherTimer. This avoids ALL
@@ -702,9 +708,12 @@ $script:AuditChecks = Discover-AuditChecks
         <RowDefinition Height="18" />
         <RowDefinition Height="Auto" />
         <RowDefinition Height="18" />
-        <RowDefinition Height="*" />
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="18" />
+        <RowDefinition Height="380" />
       </Grid.RowDefinitions>
 
+      <!-- ================ HEADER (dark) - branding + PC ONLINE card ================ -->
       <Border Grid.Row="0"
               Background="#0F0F10"
               BorderBrush="#232326"
@@ -714,7 +723,7 @@ $script:AuditChecks = Discover-AuditChecks
         <Grid>
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*" />
-            <ColumnDefinition Width="330" />
+            <ColumnDefinition Width="360" />
           </Grid.ColumnDefinitions>
 
           <StackPanel Grid.Column="0">
@@ -734,35 +743,106 @@ $script:AuditChecks = Discover-AuditChecks
                        Foreground="#B3B3BC"
                        FontSize="14"
                        TextWrapping="Wrap"
-                       Text="Portable Windows launcher. The window stays open while scripts run." />
+                       Text="Rutherford software" />
           </StackPanel>
 
           <Border Grid.Column="1"
                   Background="#151517"
                   BorderBrush="#27272A"
                   BorderThickness="1"
-                  CornerRadius="18"
-                  Padding="16">
+                  CornerRadius="16"
+                  Padding="18">
             <StackPanel>
-              <TextBlock Text="Operator Flow"
+              <StackPanel Orientation="Horizontal">
+                <Ellipse Width="10" Height="10" Fill="#63B02F" VerticalAlignment="Center" Margin="0,0,8,0" />
+                <TextBlock Text="COMPUTER ONLINE"
+                           FontSize="11"
+                           FontWeight="Bold"
+                           Foreground="#71717A" />
+              </StackPanel>
+              <TextBlock Name="ComputerNameText"
+                         Margin="0,10,0,0"
+                         FontSize="26"
                          FontWeight="Bold"
-                         Foreground="#F9F9FA" />
-              <TextBlock Margin="0,10,0,0"
+                         Foreground="#F4F4F5"
+                         Text="" />
+              <TextBlock Name="ComputerDateText"
+                         Margin="0,6,0,0"
+                         FontSize="12"
                          Foreground="#B3B3BC"
+                         Text="" />
+              <TextBlock Name="LastUpdatedText"
+                         Margin="0,4,0,0"
+                         FontSize="11"
+                         Foreground="#71717A"
                          TextWrapping="Wrap"
-                         Text="1. Open the launcher.&#x0a;2. Click an action button.&#x0a;3. Watch live logs.&#x0a;4. Open the HTML report when finished." />
+                         Text="" />
             </StackPanel>
           </Border>
         </Grid>
       </Border>
 
-      <Grid Grid.Row="2">
+      <!-- ================ PROGRESS SEGMENTED BAR ================ -->
+      <Border Grid.Row="2"
+              Background="#FFFFFF"
+              BorderBrush="#E5E7EB"
+              BorderThickness="1"
+              CornerRadius="22"
+              Padding="20">
+        <StackPanel>
+          <TextBlock Text="PREPARATION PROGRESS"
+                     FontSize="13"
+                     FontWeight="Bold"
+                     Foreground="#71717A" />
+          <Grid Margin="0,12,0,0">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="120" />
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0"
+                    Height="48"
+                    CornerRadius="24"
+                    Background="#F4F4F5"
+                    ClipToBounds="True">
+              <Grid Name="ProgressSegments" />
+            </Border>
+
+            <Border Grid.Column="1"
+                    Margin="20,0,0,0"
+                    Height="48"
+                    CornerRadius="24"
+                    Background="#DCFCE7"
+                    BorderBrush="#63B02F"
+                    BorderThickness="2">
+              <StackPanel VerticalAlignment="Center">
+                <TextBlock Name="ProgressPercentText"
+                           Text="0%"
+                           FontSize="20"
+                           FontWeight="Bold"
+                           Foreground="#166534"
+                           HorizontalAlignment="Center" />
+                <TextBlock Name="ProgressLabelText"
+                           Text="READY"
+                           FontSize="10"
+                           FontWeight="Bold"
+                           Foreground="#166534"
+                           HorizontalAlignment="Center" />
+              </StackPanel>
+            </Border>
+          </Grid>
+        </StackPanel>
+      </Border>
+
+      <!-- ================ MAIN BODY: Actions left + Live status right ================ -->
+      <Grid Grid.Row="4">
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="380" />
           <ColumnDefinition Width="18" />
           <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
+        <!-- Actions panel (left) -->
         <Border Grid.Column="0"
                 Background="#FFFFFF"
                 BorderBrush="#E5E7EB"
@@ -791,11 +871,12 @@ $script:AuditChecks = Discover-AuditChecks
             <Button Name="RefreshNetworkButton"
                     Style="{StaticResource RoundedSecondaryButton}"
                     Margin="0,10,0,0"
-                    Content="Refresh Network Status" />
+                    Content="Refresh All Status" />
 
             <Button Name="RefreshAuditButton"
                     Style="{StaticResource RoundedSecondaryButton}"
                     Margin="0,10,0,0"
+                    Visibility="Collapsed"
                     Content="Refresh Setup Audit" />
 
             <Button Name="ClearLogsButton"
@@ -803,203 +884,173 @@ $script:AuditChecks = Discover-AuditChecks
                     Margin="0,10,0,0"
                     Content="Clear Logs" />
 
-            <TextBlock Margin="0,24,0,0"
-                       Foreground="#111111"
+            <TextBlock Margin="0,20,0,0"
+                       Foreground="#71717A"
+                       FontSize="12"
                        FontWeight="Bold"
-                       Text="Current Report" />
+                       Text="CURRENT REPORT" />
             <TextBlock Name="ReportSummaryText"
-                       Margin="0,8,0,0"
+                       Margin="0,6,0,0"
                        Foreground="#52525B"
+                       FontSize="12"
                        TextWrapping="Wrap"
                        Text="No report yet." />
 
-            <TextBlock Margin="0,16,0,0"
-                       Foreground="#111111"
-                       FontWeight="Bold"
-                       Text="State File" />
             <TextBlock Name="StateFileText"
-                       Margin="0,6,0,0"
-                       Foreground="#52525B"
-                       FontSize="11"
+                       Margin="0,12,0,0"
+                       Foreground="#A1A1AA"
+                       FontSize="10"
                        TextWrapping="Wrap"
                        Text="" />
           </StackPanel>
         </Border>
 
-        <Grid Grid.Column="2">
-          <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="18" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="18" />
-            <RowDefinition Height="380" />
-          </Grid.RowDefinitions>
-
-          <Border Grid.Row="0"
-                  Background="#0F0F10"
-                  BorderBrush="#232326"
-                  BorderThickness="1"
-                  CornerRadius="22"
-                  Padding="20">
+        <!-- Live Status panel (right) - combines Network + Audit -->
+        <Border Grid.Column="2"
+                Background="#FFFFFF"
+                BorderBrush="#E5E7EB"
+                BorderThickness="1"
+                CornerRadius="22"
+                Padding="20">
+          <StackPanel>
             <Grid>
               <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="260" />
+                <ColumnDefinition Width="Auto" />
               </Grid.ColumnDefinitions>
-
-              <StackPanel Grid.Column="0">
-                <TextBlock Text="Execution"
-                           FontSize="20"
-                           FontWeight="Bold" />
-                <TextBlock Name="CurrentTaskText"
-                           Margin="0,10,0,0"
-                           FontSize="24"
-                           FontWeight="SemiBold"
-                           Text="Ready" />
-                <TextBlock Name="CurrentStatusText"
-                           Margin="0,8,0,0"
-                           Foreground="#B3B3BC"
-                           Text="Waiting for action." />
-              </StackPanel>
-
-              <Border Grid.Column="1"
-                      Background="#151517"
-                      BorderBrush="#27272A"
-                      BorderThickness="1"
-                      CornerRadius="18"
-                      Padding="14">
-                <StackPanel>
-                  <TextBlock Text="Computer"
-                             FontWeight="Bold" />
-                  <TextBlock Name="ComputerNameText"
-                             Margin="0,8,0,0"
-                             Foreground="#B3B3BC"
-                             TextWrapping="Wrap"
-                             Text="" />
-                  <TextBlock Name="LastUpdatedText"
-                             Margin="0,8,0,0"
-                             Foreground="#71717A"
-                             FontSize="11"
-                             TextWrapping="Wrap"
-                             Text="" />
-                </StackPanel>
-              </Border>
-            </Grid>
-          </Border>
-
-          <Grid Grid.Row="2">
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="*" />
-              <ColumnDefinition Width="18" />
-              <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
-
-            <Border Grid.Column="0"
-                    Background="#FFFFFF"
-                    BorderBrush="#E5E7EB"
-                    BorderThickness="1"
-                    CornerRadius="22"
-                    Padding="20">
-              <StackPanel>
-                <Grid>
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                  </Grid.ColumnDefinitions>
-                  <TextBlock Grid.Column="0"
-                             Text="Network Cards"
-                             Foreground="#111111"
-                             FontSize="20"
-                             FontWeight="Bold" />
-                  <TextBlock Grid.Column="1"
-                             Name="NetworkSummaryText"
-                             VerticalAlignment="Center"
-                             Foreground="#52525B"
-                             Text="" />
-                </Grid>
-                <TextBlock Margin="0,8,0,0"
-                           Foreground="#52525B"
-                           TextWrapping="Wrap"
-                           Text="Name, IP and mask must match Network.ps1 expectations." />
-                <StackPanel Name="NetworkCardsPanel"
-                            Margin="0,16,0,0" />
-              </StackPanel>
-            </Border>
-
-            <Border Grid.Column="2"
-                    Background="#FFFFFF"
-                    BorderBrush="#E5E7EB"
-                    BorderThickness="1"
-                    CornerRadius="22"
-                    Padding="20">
-              <StackPanel>
-                <Grid>
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                  </Grid.ColumnDefinitions>
-                  <TextBlock Grid.Column="0"
-                             Text="Setup Audit"
-                             Foreground="#111111"
-                             FontSize="20"
-                             FontWeight="Bold" />
-                  <TextBlock Grid.Column="1"
-                             Name="AuditSummaryText"
-                             VerticalAlignment="Center"
-                             Foreground="#52525B"
-                             Text="" />
-                </Grid>
-                <TextBlock Margin="0,8,0,0"
-                           Foreground="#52525B"
-                           TextWrapping="Wrap"
-                           Text="Every modification expected from Setup is verified on this machine." />
-                <StackPanel Name="AuditChecksPanel"
-                            Margin="0,16,0,0" />
-              </StackPanel>
-            </Border>
-          </Grid>
-
-          <Border Grid.Row="4"
-                  Background="#0B0B0C"
-                  BorderBrush="#232326"
-                  BorderThickness="1"
-                  CornerRadius="22"
-                  Padding="16">
-            <Grid>
-              <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="12" />
-                <RowDefinition Height="*" />
-              </Grid.RowDefinitions>
-
-              <TextBlock Grid.Row="0"
-                         Text="Live Logs"
+              <TextBlock Grid.Column="0"
+                         Text="Live status"
+                         Foreground="#111111"
                          FontSize="20"
                          FontWeight="Bold" />
-
-              <ListBox Grid.Row="2"
-                       Name="LogsListBox"
-                       Background="#0B0B0C"
-                       Foreground="#F4F4F5"
-                       BorderThickness="0"
-                       FontFamily="Consolas"
-                       FontSize="13"
-                       ScrollViewer.VerticalScrollBarVisibility="Auto"
-                       ScrollViewer.HorizontalScrollBarVisibility="Auto" />
+              <Border Grid.Column="1"
+                      VerticalAlignment="Center"
+                      CornerRadius="16"
+                      Background="#DCFCE7"
+                      BorderBrush="#63B02F"
+                      BorderThickness="2"
+                      Padding="14,4">
+                <TextBlock Name="LiveStatusOkText"
+                           FontSize="14"
+                           FontWeight="Bold"
+                           Foreground="#166534"
+                           Text="0 / 0 OK" />
+              </Border>
             </Grid>
-          </Border>
-        </Grid>
+
+            <!-- Hidden text used by Set-Status for the execution banner -->
+            <TextBlock Name="CurrentTaskText"
+                       Visibility="Collapsed"
+                       Text="Ready" />
+            <TextBlock Name="CurrentStatusText"
+                       Visibility="Collapsed"
+                       Text="Waiting for action." />
+
+            <!-- Network section header -->
+            <Border Margin="0,16,0,0"
+                    CornerRadius="8"
+                    Background="#E6F4FF"
+                    Padding="0">
+              <Grid Height="28">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="6" />
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Rectangle Grid.Column="0" Fill="#1DB6FF" />
+                <TextBlock Grid.Column="1"
+                           Margin="14,0,0,0"
+                           VerticalAlignment="Center"
+                           Text="NETWORK CARDS"
+                           Foreground="#0C447C"
+                           FontSize="13"
+                           FontWeight="Bold" />
+                <TextBlock Grid.Column="2"
+                           Margin="0,0,14,0"
+                           VerticalAlignment="Center"
+                           Name="NetworkSummaryText"
+                           Foreground="#0C447C"
+                           FontSize="12"
+                           FontWeight="Bold"
+                           Text="0 / 0" />
+              </Grid>
+            </Border>
+
+            <StackPanel Name="NetworkCardsPanel" Margin="0,8,0,0" />
+
+            <!-- Audit section header -->
+            <Border Margin="0,16,0,0"
+                    CornerRadius="8"
+                    Background="#EAF6E0"
+                    Padding="0">
+              <Grid Height="28">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="6" />
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Rectangle Grid.Column="0" Fill="#63B02F" />
+                <TextBlock Grid.Column="1"
+                           Margin="14,0,0,0"
+                           VerticalAlignment="Center"
+                           Text="SETUP AUDIT"
+                           Foreground="#1F4D11"
+                           FontSize="13"
+                           FontWeight="Bold" />
+                <TextBlock Grid.Column="2"
+                           Margin="0,0,14,0"
+                           VerticalAlignment="Center"
+                           Name="AuditSummaryText"
+                           Foreground="#1F4D11"
+                           FontSize="12"
+                           FontWeight="Bold"
+                           Text="0 / 0" />
+              </Grid>
+            </Border>
+
+            <StackPanel Name="AuditChecksPanel" Margin="0,8,0,0" />
+          </StackPanel>
+        </Border>
       </Grid>
 
-      <Border Grid.Row="4"
-              Background="#0F0F10"
+      <!-- ================ LIVE LOGS (full width, dark) ================ -->
+      <Border Grid.Row="6"
+              Background="#0B0B0C"
               BorderBrush="#232326"
               BorderThickness="1"
               CornerRadius="22"
               Padding="16">
-        <TextBlock Foreground="#B3B3BC"
-                   TextWrapping="Wrap"
-                   Text="Reports are saved next to the launcher in the reports folder. Network expectations come from assets\config\network-profiles.json. Audit checks live in assets\checks and can be added or modified without rebuilding the EXE." />
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="12" />
+            <RowDefinition Height="*" />
+          </Grid.RowDefinitions>
+
+          <Grid Grid.Row="0">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="Auto" />
+              <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+              <Ellipse Width="10" Height="10" Fill="#FD0902" Margin="4,0,8,0" />
+              <TextBlock Text="LIVE LOGS"
+                         FontSize="14"
+                         FontWeight="Bold"
+                         Foreground="#F4F4F5" />
+            </StackPanel>
+          </Grid>
+
+          <ListBox Grid.Row="2"
+                   Name="LogsListBox"
+                   Background="#0B0B0C"
+                   Foreground="#F4F4F5"
+                   BorderThickness="0"
+                   FontFamily="Consolas"
+                   FontSize="13"
+                   ScrollViewer.VerticalScrollBarVisibility="Auto"
+                   ScrollViewer.HorizontalScrollBarVisibility="Auto" />
+        </Grid>
       </Border>
     </Grid>
   </ScrollViewer>
@@ -1050,17 +1101,18 @@ $networkSummaryText  = $window.FindName("NetworkSummaryText")
 $auditChecksPanel    = $window.FindName("AuditChecksPanel")
 $auditSummaryText    = $window.FindName("AuditSummaryText")
 $computerNameText    = $window.FindName("ComputerNameText")
+$computerDateText    = $window.FindName("ComputerDateText")
 $lastUpdatedText     = $window.FindName("LastUpdatedText")
 $actionsHelpText     = $window.FindName("ActionsHelpText")
+$progressSegments    = $window.FindName("ProgressSegments")
+$progressPercentText = $window.FindName("ProgressPercentText")
+$progressLabelText   = $window.FindName("ProgressLabelText")
+$liveStatusOkText    = $window.FindName("LiveStatusOkText")
 
 $logsListBox.ItemsSource = $script:LogItems
 $computerNameText.Text   = $env:COMPUTERNAME
 $stateFileText.Text      = $script:StateFilePath
-
-$heroSubtitle = $window.FindName("HeroSubtitle")
-if ($heroSubtitle) {
-    $heroSubtitle.Text = "Assets folder: $script:AssetsRoot"
-}
+$computerDateText.Text   = (Get-Date).ToString("dd MMM yyyy - HH:mm:ss")
 
 # ----------------------------------------------------------------------------
 # Color helpers
@@ -1280,70 +1332,88 @@ function Build-ActionButtons {
 function Add-NetworkCardElement {
     param($Snapshot)
 
+    # Compact single-row card: dot + name + detail + OK pill on the right
     $border = New-Object System.Windows.Controls.Border
-    $border.CornerRadius = [System.Windows.CornerRadius]::new(18)
-    $border.BorderThickness = [System.Windows.Thickness]::new(1)
-    $border.Padding = [System.Windows.Thickness]::new(14)
-    $border.Margin = [System.Windows.Thickness]::new(0, 0, 0, 10)
+    $border.CornerRadius = [System.Windows.CornerRadius]::new(10)
+    $border.Padding = [System.Windows.Thickness]::new(14, 8, 14, 8)
+    $border.Margin = [System.Windows.Thickness]::new(0, 0, 0, 6)
     $border.Background = Get-Brush "#FAFAFA"
-    $border.BorderBrush = Get-Brush "#E5E7EB"
 
-    $stack = New-Object System.Windows.Controls.StackPanel
-    $border.Child = $stack
+    $grid = New-Object System.Windows.Controls.Grid
+    $border.Child = $grid
 
-    $headerGrid = New-Object System.Windows.Controls.Grid
-    $headerGrid.Margin = [System.Windows.Thickness]::new(0, 0, 0, 10)
-    [void]$headerGrid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition))
-    $statusColumn = New-Object System.Windows.Controls.ColumnDefinition
-    $statusColumn.Width = [System.Windows.GridLength]::new(92)
-    [void]$headerGrid.ColumnDefinitions.Add($statusColumn)
+    [void]$grid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition))   # name
+    $colDetail = New-Object System.Windows.Controls.ColumnDefinition
+    $colDetail.Width = "Auto"
+    [void]$grid.ColumnDefinitions.Add($colDetail)                                              # detail
+    $colStatus = New-Object System.Windows.Controls.ColumnDefinition
+    $colStatus.Width = [System.Windows.GridLength]::new(72)
+    [void]$grid.ColumnDefinitions.Add($colStatus)                                              # OK pill
+
+    # left: dot + name
+    $leftStack = New-Object System.Windows.Controls.StackPanel
+    $leftStack.Orientation = "Horizontal"
+    $leftStack.VerticalAlignment = "Center"
+    [System.Windows.Controls.Grid]::SetColumn($leftStack, 0)
+
+    $dot = New-Object System.Windows.Shapes.Ellipse
+    $dot.Width = 10; $dot.Height = 10
+    $dot.Fill = Get-Brush $(if ($Snapshot.Status -eq "success") { "#63B02F" } else { "#FD0902" })
+    $dot.Margin = [System.Windows.Thickness]::new(0, 0, 12, 0)
+    $dot.VerticalAlignment = "Center"
+    [void]$leftStack.Children.Add($dot)
 
     $nameText = New-Object System.Windows.Controls.TextBlock
     $nameText.Text = $Snapshot.Name
     $nameText.FontWeight = "Bold"
-    $nameText.FontSize = 16
+    $nameText.FontSize = 14
     $nameText.Foreground = Get-Brush "#111111"
-    [System.Windows.Controls.Grid]::SetColumn($nameText, 0)
-    [void]$headerGrid.Children.Add($nameText)
+    $nameText.VerticalAlignment = "Center"
+    [void]$leftStack.Children.Add($nameText)
 
+    [void]$grid.Children.Add($leftStack)
+
+    # middle: short detail (IP / mask or DHCP)
+    $detailText = New-Object System.Windows.Controls.TextBlock
+    $detailText.Text = if ($Snapshot.Mode -eq "dhcp") {
+        "DHCP"
+    } elseif ($Snapshot.ActualIp -and $Snapshot.ActualIp -ne "N/A") {
+        "$($Snapshot.ActualIp)"
+    } else {
+        ""
+    }
+    $detailText.FontSize = 12
+    $detailText.Foreground = Get-Brush "#52525B"
+    $detailText.VerticalAlignment = "Center"
+    $detailText.Margin = [System.Windows.Thickness]::new(0, 0, 12, 0)
+    $detailText.ToolTip = $Snapshot.Detail
+    [System.Windows.Controls.Grid]::SetColumn($detailText, 1)
+    [void]$grid.Children.Add($detailText)
+
+    # right: OK / Mismatch pill
     $statusBorder = New-Object System.Windows.Controls.Border
-    $statusBorder.CornerRadius = [System.Windows.CornerRadius]::new(10)
-    $statusBorder.Padding = [System.Windows.Thickness]::new(10, 4, 10, 4)
+    $statusBorder.CornerRadius = [System.Windows.CornerRadius]::new(8)
+    $statusBorder.Padding = [System.Windows.Thickness]::new(0, 4, 0, 4)
+    $statusBorder.VerticalAlignment = "Center"
     $statusBorder.HorizontalAlignment = "Right"
     if ($Snapshot.Status -eq "success") {
         $statusBorder.Background = Get-Brush "#DCFCE7"
-        $statusTextColor = "#166534"
-    }
-    else {
+        $statusFg = "#166534"
+    } else {
         $statusBorder.Background = Get-Brush "#FEE2E2"
-        $statusTextColor = "#B91C1C"
+        $statusFg = "#B91C1C"
     }
 
     $statusText = New-Object System.Windows.Controls.TextBlock
     $statusText.Text = $Snapshot.StatusText
+    $statusText.FontSize = 12
     $statusText.FontWeight = "Bold"
-    $statusText.Foreground = Get-Brush $statusTextColor
+    $statusText.Foreground = Get-Brush $statusFg
+    $statusText.HorizontalAlignment = "Center"
     $statusBorder.Child = $statusText
-    [System.Windows.Controls.Grid]::SetColumn($statusBorder, 1)
-    [void]$headerGrid.Children.Add($statusBorder)
 
-    [void]$stack.Children.Add($headerGrid)
-
-    foreach ($line in @(
-        "Expected Name: $($Snapshot.Name)",
-        "Actual Name: $($Snapshot.ActualName)",
-        "Expected IP: $($Snapshot.ExpectedIp)",
-        "Actual IP: $($Snapshot.ActualIp)",
-        "Expected Mask: $($Snapshot.ExpectedMask)",
-        "Actual Mask: $($Snapshot.ActualMask)",
-        "Detail: $($Snapshot.Detail)"
-    )) {
-        $text = New-Object System.Windows.Controls.TextBlock
-        $text.Text = $line
-        $text.Margin = [System.Windows.Thickness]::new(0, 2, 0, 0)
-        $text.Foreground = Get-Brush "#52525B"
-        [void]$stack.Children.Add($text)
-    }
+    [System.Windows.Controls.Grid]::SetColumn($statusBorder, 2)
+    [void]$grid.Children.Add($statusBorder)
 
     [void]$networkCardsPanel.Children.Add($border)
 }
@@ -1357,7 +1427,9 @@ function Refresh-NetworkCards {
             if ($snapshot.Status -eq "success") { $okCount++ }
             Add-NetworkCardElement -Snapshot $snapshot
         }
-        $networkSummaryText.Text = "$okCount / $($snapshots.Count) OK"
+        $networkSummaryText.Text = "$okCount / $($snapshots.Count)"
+        $script:LastNetworkOk = $okCount
+        $script:LastNetworkTotal = $snapshots.Count
     }
     catch {
         $networkCardsPanel.Children.Clear()
@@ -1366,7 +1438,10 @@ function Refresh-NetworkCards {
         $errorText.Foreground = Get-Brush "#B91C1C"
         [void]$networkCardsPanel.Children.Add($errorText)
         $networkSummaryText.Text = "Error"
+        $script:LastNetworkOk = 0
+        $script:LastNetworkTotal = 0
     }
+    Refresh-LiveStatusOkText
 }
 
 # ----------------------------------------------------------------------------
@@ -1462,10 +1537,15 @@ function Refresh-AuditPanel {
             $emptyText.Foreground = Get-Brush "#52525B"
             $emptyText.TextWrapping = "Wrap"
             [void]$auditChecksPanel.Children.Add($emptyText)
-            $auditSummaryText.Text = "0 checks"
+            $auditSummaryText.Text = "0 / 0"
+            $script:LastAuditOk = 0
+            $script:LastAuditTotal = 0
+            Refresh-LiveStatusOkText
             return
         }
 
+        # Run all checks first to gather results + counts
+        $results = @()
         $okCount = 0
         $missingCount = 0
         $partialCount = 0
@@ -1479,27 +1559,87 @@ function Refresh-AuditPanel {
             catch {
                 $result = @{ Status = "unknown"; Detail = "Check error: $($_.Exception.Message)" }
             }
-
             if (-not ($result -is [hashtable]) -or -not $result.ContainsKey('Status')) {
                 $result = @{ Status = "unknown"; Detail = "Check returned no status" }
             }
-
             switch ([string]$result.Status) {
                 "ok"      { $okCount++ }
                 "missing" { $missingCount++ }
                 "partial" { $partialCount++ }
                 default   { $unknownCount++ }
             }
-
-            Add-AuditCardElement -Check $check -Result $result
+            $results += @{ Check = $check; Result = $result }
         }
 
+        # Build 3-column grid of compact pills
+        $grid = New-Object System.Windows.Controls.Grid
+        $cols = 3
+        for ($i = 0; $i -lt $cols; $i++) {
+            $col = New-Object System.Windows.Controls.ColumnDefinition
+            [void]$grid.ColumnDefinitions.Add($col)
+        }
+        $rows = [int][Math]::Ceiling($results.Count / [double]$cols)
+        for ($i = 0; $i -lt $rows; $i++) {
+            $row = New-Object System.Windows.Controls.RowDefinition
+            $row.Height = "Auto"
+            [void]$grid.RowDefinitions.Add($row)
+        }
+
+        for ($idx = 0; $idx -lt $results.Count; $idx++) {
+            $r = $results[$idx]
+            $cIdx = $idx % $cols
+            $rIdx = [int][Math]::Floor($idx / $cols)
+
+            $visual = Get-AuditStatusVisual -Status $r.Result.Status
+
+            $pill = New-Object System.Windows.Controls.Border
+            $pill.CornerRadius = [System.Windows.CornerRadius]::new(10)
+            $pill.Padding = [System.Windows.Thickness]::new(12, 6, 12, 6)
+            $marginLeft  = if ($cIdx -eq 0) { 0 } else { 4 }
+            $marginRight = if ($cIdx -eq $cols - 1) { 0 } else { 4 }
+            $pill.Margin = [System.Windows.Thickness]::new($marginLeft, 0, $marginRight, 6)
+            $pill.Background = Get-Brush $visual.Bg
+            $pill.ToolTip = if ($r.Result.Detail) { [string]$r.Result.Detail } else { "" }
+
+            $innerGrid = New-Object System.Windows.Controls.Grid
+            [void]$innerGrid.ColumnDefinitions.Add((New-Object System.Windows.Controls.ColumnDefinition))
+            $cAuto = New-Object System.Windows.Controls.ColumnDefinition
+            $cAuto.Width = "Auto"
+            [void]$innerGrid.ColumnDefinitions.Add($cAuto)
+
+            $labelText = New-Object System.Windows.Controls.TextBlock
+            $labelText.Text = $r.Check.Label
+            $labelText.FontSize = 12
+            $labelText.FontWeight = "Bold"
+            $labelText.Foreground = Get-Brush $visual.Fg
+            $labelText.VerticalAlignment = "Center"
+            $labelText.TextTrimming = "CharacterEllipsis"
+            [System.Windows.Controls.Grid]::SetColumn($labelText, 0)
+            [void]$innerGrid.Children.Add($labelText)
+
+            $statusText = New-Object System.Windows.Controls.TextBlock
+            $statusText.Text = $visual.Label
+            $statusText.FontSize = 11
+            $statusText.FontWeight = "Bold"
+            $statusText.Foreground = Get-Brush $visual.Fg
+            $statusText.VerticalAlignment = "Center"
+            $statusText.Margin = [System.Windows.Thickness]::new(8, 0, 0, 0)
+            [System.Windows.Controls.Grid]::SetColumn($statusText, 1)
+            [void]$innerGrid.Children.Add($statusText)
+
+            $pill.Child = $innerGrid
+
+            [System.Windows.Controls.Grid]::SetColumn($pill, $cIdx)
+            [System.Windows.Controls.Grid]::SetRow($pill, $rIdx)
+            [void]$grid.Children.Add($pill)
+        }
+
+        [void]$auditChecksPanel.Children.Add($grid)
+
         $total = $script:AuditChecks.Count
-        $parts = @("$okCount / $total OK")
-        if ($missingCount -gt 0) { $parts += "$missingCount missing" }
-        if ($partialCount -gt 0) { $parts += "$partialCount partial" }
-        if ($unknownCount -gt 0) { $parts += "$unknownCount unknown" }
-        $auditSummaryText.Text = ($parts -join " · ")
+        $auditSummaryText.Text = "$okCount / $total"
+        $script:LastAuditOk = $okCount
+        $script:LastAuditTotal = $total
     }
     catch {
         $auditChecksPanel.Children.Clear()
@@ -1508,6 +1648,102 @@ function Refresh-AuditPanel {
         $errorText.Foreground = Get-Brush "#B91C1C"
         [void]$auditChecksPanel.Children.Add($errorText)
         $auditSummaryText.Text = "Error"
+        $script:LastAuditOk = 0
+        $script:LastAuditTotal = 0
+    }
+    Refresh-LiveStatusOkText
+}
+
+# ----------------------------------------------------------------------------
+# Live status pill ("X / Y OK" on the same line as Live status title)
+# ----------------------------------------------------------------------------
+
+function Refresh-LiveStatusOkText {
+    if (-not $liveStatusOkText) { return }
+    $totalOk  = $script:LastNetworkOk + $script:LastAuditOk
+    $totalAll = $script:LastNetworkTotal + $script:LastAuditTotal
+    $liveStatusOkText.Text = "$totalOk / $totalAll OK"
+}
+
+# ----------------------------------------------------------------------------
+# Progress bar (segmented)
+# ----------------------------------------------------------------------------
+
+function Build-ProgressBar {
+    if (-not $progressSegments) { return }
+
+    try {
+        $progressSegments.Children.Clear()
+        $progressSegments.ColumnDefinitions.Clear()
+
+        if (-not $script:Tasks -or $script:Tasks.Count -eq 0) {
+            $progressPercentText.Text = "0%"
+            $progressLabelText.Text = "READY"
+            return
+        }
+
+        foreach ($task in $script:Tasks) {
+            $col = New-Object System.Windows.Controls.ColumnDefinition
+            [void]$progressSegments.ColumnDefinitions.Add($col)
+        }
+
+        $idx = 0
+        $doneCount = 0
+        foreach ($task in $script:Tasks) {
+            $colorName = if ($task.Color) { [string]$task.Color } elseif ($task.Primary) { "green" } else { "blue" }
+            $accent = Get-ColorLoopAccent -Name $colorName
+
+            $state = "Not done"
+            if ($script:State.scripts -and $script:State.scripts.ContainsKey($task.Key)) {
+                $val = [string]$script:State.scripts[$task.Key].status
+                if (-not [string]::IsNullOrWhiteSpace($val)) { $state = $val }
+            }
+
+            $cellBorder = New-Object System.Windows.Controls.Border
+            switch ($state) {
+                "Done"    { $cellBorder.Background = Get-Brush $accent.Bg; $doneCount++ }
+                "Running" { $cellBorder.Background = Get-Brush "#FEF3C7" }
+                "Error"   { $cellBorder.Background = Get-Brush "#FCA5A5" }
+                default   { $cellBorder.Background = [System.Windows.Media.Brushes]::Transparent }
+            }
+
+            $stack = New-Object System.Windows.Controls.StackPanel
+            $stack.HorizontalAlignment = "Center"
+            $stack.VerticalAlignment = "Center"
+
+            $labelText = New-Object System.Windows.Controls.TextBlock
+            $labelText.Text = ($task.Label -replace "^Run\s+", "")
+            $labelText.FontSize = 14
+            $labelText.FontWeight = "Bold"
+            $labelText.HorizontalAlignment = "Center"
+            $labelText.Foreground = Get-Brush $(if ($state -eq "Done") { $accent.Fg } else { "#52525B" })
+            [void]$stack.Children.Add($labelText)
+
+            $stateText = New-Object System.Windows.Controls.TextBlock
+            $stateText.Text = $state.ToLower()
+            $stateText.FontSize = 10
+            $stateText.HorizontalAlignment = "Center"
+            $stateText.Margin = [System.Windows.Thickness]::new(0, 1, 0, 0)
+            $stateText.Foreground = Get-Brush $(if ($state -eq "Done") { $accent.Fg } else { "#71717A" })
+            $stateText.Opacity = 0.85
+            [void]$stack.Children.Add($stateText)
+
+            $cellBorder.Child = $stack
+
+            [System.Windows.Controls.Grid]::SetColumn($cellBorder, $idx)
+            [void]$progressSegments.Children.Add($cellBorder)
+
+            $idx++
+        }
+
+        $pct = [int][Math]::Round(($doneCount / $script:Tasks.Count) * 100)
+        $progressPercentText.Text = "$pct%"
+        if ($pct -eq 100)      { $progressLabelText.Text = "DONE" }
+        elseif ($pct -gt 0)    { $progressLabelText.Text = "ONGOING" }
+        else                   { $progressLabelText.Text = "READY" }
+    }
+    catch {
+        Write-CrashLog ("Build-ProgressBar error: " + $_.Exception.Message)
     }
 }
 
@@ -1972,7 +2208,10 @@ function Drain-RedirectFile {
 Build-ActionButtons
 
 $refreshNetworkButton.Add_Click({
+    # "Refresh all status" - refreshes network AND audit AND progress bar
     try { Refresh-NetworkCards } catch { Append-LogLine ("Refresh-NetworkCards failed: " + $_.Exception.Message) }
+    try { Refresh-AuditPanel  } catch { Append-LogLine ("Refresh-AuditPanel failed: "  + $_.Exception.Message) }
+    try { Build-ProgressBar   } catch { Append-LogLine ("Build-ProgressBar failed: "   + $_.Exception.Message) }
 })
 
 $refreshAuditButton.Add_Click({
@@ -2088,6 +2327,7 @@ function Handle-TaskCompletion {
         if ($taskRef -and $taskRef.AuditAfterRun) {
             try { Refresh-AuditPanel } catch { Write-CrashLog ("Refresh-AuditPanel error: " + $_.Exception.Message) }
         }
+        try { Build-ProgressBar } catch { Write-CrashLog ("Build-ProgressBar error: " + $_.Exception.Message) }
 
         if ($script:State.lastUpdated) {
             try { $lastUpdatedText.Text = "Last update: $($script:State.lastUpdated)" } catch { }
@@ -2164,6 +2404,7 @@ else {
 
 Refresh-NetworkCards
 Refresh-AuditPanel
+Build-ProgressBar
 Set-Status -TaskText "Ready" -StatusText "Waiting for action."
 
 $window.Add_SourceInitialized({
