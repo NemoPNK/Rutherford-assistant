@@ -373,6 +373,7 @@ function Discover-Tasks {
                 Description    = if ($manifest.description) { [string]$manifest.description } else { "" }
                 Order          = if ($null -ne $manifest.order) { [int]$manifest.order } else { 999 }
                 Primary        = if ($null -ne $manifest.primary) { [bool]$manifest.primary } else { $false }
+                Color          = if ($manifest.color) { [string]$manifest.color } else { $null }
                 AuditAfterRun  = if ($null -ne $manifest.auditAfterRun) { [bool]$manifest.auditAfterRun } else { $false }
                 ScriptPath     = $scriptPath
                 ManifestPath   = $manifestFile.FullName
@@ -704,7 +705,8 @@ $script:AuditChecks = Discover-AuditChecks
       <Setter Property="Height" Value="42" />
     </Style>
   </Window.Resources>
-  <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+  <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                PanningMode="VerticalFirst" PanningDeceleration="0.001" PanningRatio="1">
     <Grid Margin="20">
       <Grid.RowDefinitions>
         <RowDefinition Height="Auto" />
@@ -742,30 +744,89 @@ $script:AuditChecks = Discover-AuditChecks
                          FontSize="32"
                          FontWeight="Bold"
                          VerticalAlignment="Center" />
-              <Border Width="22" Height="22"
+              <Border Name="InfoButton"
+                      Width="24" Height="24"
                       Margin="14,8,0,0"
-                      CornerRadius="11"
+                      CornerRadius="12"
                       Background="#1DB6FF"
-                      Cursor="Help"
-                      VerticalAlignment="Center"
-                      ToolTipService.InitialShowDelay="120"
-                      ToolTipService.ShowDuration="120000">
-                <Border.ToolTip>
-                  <ToolTip>
-                    <StackPanel MaxWidth="340">
-                      <TextBlock Text="How it works" FontWeight="Bold" FontSize="14" Margin="0,0,0,8" />
-                      <TextBlock TextWrapping="Wrap" FontSize="12"
-                                 Text="1) Run Setup - wallpaper, app cleanup, registry tweaks, OPS folder.&#10;2) Run Language - en-US system locale + US keyboard, removes French.&#10;3) Run Network - rename adapters and apply the IP profiles.&#10;&#10;Keep this window open while a script runs (one at a time).&#10;&#10;ALL GOOD when: Live status shows green badges (Network + Setup audit) and the header says 'System ready'.&#10;&#10;If the header shows 'Restart required', reboot the PC to finish applying the language." />
-                    </StackPanel>
-                  </ToolTip>
-                </Border.ToolTip>
+                      Cursor="Hand"
+                      VerticalAlignment="Center">
                 <TextBlock Text="i"
                            Foreground="#FFFFFF"
                            FontWeight="Bold"
-                           FontSize="14"
+                           FontSize="15"
                            HorizontalAlignment="Center"
                            VerticalAlignment="Center" />
               </Border>
+              <TextBlock Text="How it works"
+                         VerticalAlignment="Center"
+                         Margin="8,8,0,0"
+                         Foreground="#71717A"
+                         FontSize="12" />
+              <Popup Name="InfoPopup"
+                     PlacementTarget="{Binding ElementName=InfoButton}"
+                     Placement="Bottom"
+                     StaysOpen="False"
+                     AllowsTransparency="True"
+                     PopupAnimation="Fade"
+                     HorizontalOffset="-4"
+                     VerticalOffset="8">
+                <Border Background="#0F0F10"
+                        BorderBrush="#27272A"
+                        BorderThickness="1"
+                        CornerRadius="14"
+                        Padding="20"
+                        MaxWidth="380">
+                  <StackPanel>
+                    <TextBlock Text="How it works"
+                               Foreground="#F4F4F5"
+                               FontSize="17"
+                               FontWeight="Bold"
+                               Margin="0,0,0,14" />
+                    <Grid Margin="0,0,0,10">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="26" />
+                        <ColumnDefinition Width="*" />
+                      </Grid.ColumnDefinitions>
+                      <Border Grid.Column="0" Width="18" Height="18" CornerRadius="9" Background="#63B02F" VerticalAlignment="Top" Margin="0,2,0,0">
+                        <TextBlock Text="1" Foreground="#FFFFFF" FontSize="11" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                      </Border>
+                      <TextBlock Grid.Column="1" TextWrapping="Wrap" Foreground="#D4D4D8" FontSize="13"
+                                 Text="Run Setup - wallpaper, app cleanup, registry tweaks, OPS folder." />
+                    </Grid>
+                    <Grid Margin="0,0,0,10">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="26" />
+                        <ColumnDefinition Width="*" />
+                      </Grid.ColumnDefinitions>
+                      <Border Grid.Column="0" Width="18" Height="18" CornerRadius="9" Background="#FDD800" VerticalAlignment="Top" Margin="0,2,0,0">
+                        <TextBlock Text="2" Foreground="#0A0A0A" FontSize="11" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                      </Border>
+                      <TextBlock Grid.Column="1" TextWrapping="Wrap" Foreground="#D4D4D8" FontSize="13"
+                                 Text="Run Language - en-US system locale + US keyboard, removes French." />
+                    </Grid>
+                    <Grid Margin="0,0,0,14">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="26" />
+                        <ColumnDefinition Width="*" />
+                      </Grid.ColumnDefinitions>
+                      <Border Grid.Column="0" Width="18" Height="18" CornerRadius="9" Background="#1DB6FF" VerticalAlignment="Top" Margin="0,2,0,0">
+                        <TextBlock Text="3" Foreground="#FFFFFF" FontSize="11" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                      </Border>
+                      <TextBlock Grid.Column="1" TextWrapping="Wrap" Foreground="#D4D4D8" FontSize="13"
+                                 Text="Run Network - rename adapters and apply the IP profiles." />
+                    </Grid>
+                    <Border Background="#151517" CornerRadius="10" Padding="12">
+                      <StackPanel>
+                        <TextBlock TextWrapping="Wrap" Foreground="#9AE66E" FontSize="12" FontWeight="Bold"
+                                   Text="All good when: green badges in Live status and the header says 'System ready'." />
+                        <TextBlock TextWrapping="Wrap" Foreground="#FDD800" FontSize="12" Margin="0,6,0,0"
+                                   Text="If the header shows 'Restart required', reboot the PC to finish the language." />
+                      </StackPanel>
+                    </Border>
+                  </StackPanel>
+                </Border>
+              </Popup>
             </StackPanel>
             <TextBlock Name="HeroSubtitle"
                        Margin="0,10,0,0"
@@ -774,23 +835,24 @@ $script:AuditChecks = Discover-AuditChecks
                        TextWrapping="Wrap"
                        Text="Rutherford software" />
             <Border Name="HeaderStatusBorder"
-                    Margin="0,14,0,0"
+                    Margin="0,16,0,0"
                     HorizontalAlignment="Left"
-                    CornerRadius="14"
+                    CornerRadius="16"
                     Background="#13251A"
                     BorderBrush="#63B02F"
                     BorderThickness="1"
-                    Padding="13,5">
+                    Padding="16,9">
               <StackPanel Orientation="Horizontal">
                 <Ellipse Name="HeaderStatusDot"
-                         Width="9" Height="9"
+                         Width="12" Height="12"
                          Fill="#63B02F"
                          VerticalAlignment="Center"
-                         Margin="0,0,8,0" />
+                         Margin="0,0,10,0" />
                 <TextBlock Name="HeaderStatusText"
                            Text="System ready"
-                           FontSize="13"
+                           FontSize="16"
                            FontWeight="Bold"
+                           VerticalAlignment="Center"
                            Foreground="#9AE66E" />
               </StackPanel>
             </Border>
@@ -1111,7 +1173,8 @@ $script:AuditChecks = Discover-AuditChecks
                    FontFamily="Consolas"
                    FontSize="13"
                    ScrollViewer.VerticalScrollBarVisibility="Auto"
-                   ScrollViewer.HorizontalScrollBarVisibility="Auto" />
+                   ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                   ScrollViewer.PanningMode="VerticalFirst" />
         </Grid>
       </Border>
     </Grid>
@@ -1169,6 +1232,13 @@ $lastUpdatedText     = $window.FindName("LastUpdatedText")
 $headerStatusBorder  = $window.FindName("HeaderStatusBorder")
 $headerStatusDot     = $window.FindName("HeaderStatusDot")
 $headerStatusText    = $window.FindName("HeaderStatusText")
+$infoButton          = $window.FindName("InfoButton")
+$infoPopup           = $window.FindName("InfoPopup")
+
+# Clickable "how it works" tutorial: toggle the info popup on click.
+if ($infoButton -and $infoPopup) {
+    $infoButton.Add_MouseLeftButtonUp({ $infoPopup.IsOpen = -not $infoPopup.IsOpen })
+}
 $actionsHelpText     = $window.FindName("ActionsHelpText")
 $progressSegments    = $window.FindName("ProgressSegments")
 $progressPercentText = $window.FindName("ProgressPercentText")
@@ -1227,18 +1297,22 @@ function Update-HeaderStatus {
     if (-not $headerStatusText) { return }
     try {
         if (Get-RebootPending) {
-            $headerStatusText.Text         = "Restart required"
+            $headerStatusText.Text         = "RESTART REQUIRED"
+            $headerStatusText.FontSize      = 18
             $headerStatusText.Foreground   = Get-Brush "#FDD800"
             $headerStatusDot.Fill          = Get-Brush "#FDD800"
-            $headerStatusBorder.Background  = Get-Brush "#332900"
+            $headerStatusBorder.Background  = Get-Brush "#3A2E00"
             $headerStatusBorder.BorderBrush = Get-Brush "#FDD800"
+            $headerStatusBorder.BorderThickness = [System.Windows.Thickness]::new(2)
         }
         else {
             $headerStatusText.Text         = "System ready"
+            $headerStatusText.FontSize      = 16
             $headerStatusText.Foreground   = Get-Brush "#9AE66E"
             $headerStatusDot.Fill          = Get-Brush "#63B02F"
             $headerStatusBorder.Background  = Get-Brush "#13251A"
             $headerStatusBorder.BorderBrush = Get-Brush "#63B02F"
+            $headerStatusBorder.BorderThickness = [System.Windows.Thickness]::new(1)
         }
     }
     catch { }
@@ -1826,6 +1900,20 @@ function Build-ProgressBar {
                 "Running" { $cellBorder.Background = Get-Brush "#FEF3C7" }
                 "Error"   { $cellBorder.Background = Get-Brush "#FCA5A5" }
                 default   { $cellBorder.Background = [System.Windows.Media.Brushes]::Transparent }
+            }
+
+            # Round the bar ends: ClipToBounds clips to the rectangle, not the track's
+            # rounded corners, so the fill must round its own outer corners.
+            $r = 24
+            $lastIdx = $script:Tasks.Count - 1
+            if ($script:Tasks.Count -eq 1) {
+                $cellBorder.CornerRadius = [System.Windows.CornerRadius]::new($r)
+            }
+            elseif ($idx -eq 0) {
+                $cellBorder.CornerRadius = [System.Windows.CornerRadius]::new($r, 0, 0, $r)
+            }
+            elseif ($idx -eq $lastIdx) {
+                $cellBorder.CornerRadius = [System.Windows.CornerRadius]::new(0, $r, $r, 0)
             }
 
             $stack = New-Object System.Windows.Controls.StackPanel

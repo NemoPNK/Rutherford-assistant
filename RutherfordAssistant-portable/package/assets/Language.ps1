@@ -301,19 +301,9 @@ if ($rebootNeeded) {
         Write-Host "Could not write reboot flag: $($_.Exception.Message)"
     }
 
-    # Show an information dialog. The launcher runs this script with redirected
-    # stdin, so a GUI popup is used instead of Read-Host. Info only - the operator
-    # restarts whenever they want.
-    Write-Host "Redemarrage necessaire pour appliquer la langue."
-    try {
-        $wshell = New-Object -ComObject WScript.Shell
-        $infoMessage = "Redemarrage necessaire pour appliquer completement la langue (ecran de connexion, comptes systeme, nouveaux utilisateurs).`n`nVeuillez redemarrer l'ordinateur."
-        # Button type 0 = OK only, 48 = warning/exclamation icon, 0 = no timeout.
-        $wshell.Popup($infoMessage, 0, "Rutherford Assistant - Redemarrage necessaire", (0 + 48)) | Out-Null
-    }
-    catch {
-        Write-Host "Info dialog could not be shown: $($_.Exception.Message)"
-    }
+    # No popup dialog: the launcher header shows the "Restart required" banner,
+    # which is clearer and less intrusive than a modal window.
+    Write-Host "Redemarrage necessaire pour appliquer la langue (voir le bandeau dans le header du launcher)."
 }
 else {
     # Nothing changed that needs a restart - clear any stale flag.
