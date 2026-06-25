@@ -18,7 +18,7 @@ Portable Windows launcher for running the Rutherford preparation scripts from a 
 1. Plug in the USB key on the Windows PC.
 2. Double-click `RutherfordAssistant.exe` if available, otherwise `LaRocheLauncher.bat`.
 3. Accept the administrator prompt.
-4. Click the action button you want (`Run Setup`, `Run Network`, etc.).
+4. Click the action button you want (`Run Setup`, `Run Language`, `Run Network`, etc.).
 5. Keep the window open while the script runs.
 6. Open the generated HTML report if needed.
 

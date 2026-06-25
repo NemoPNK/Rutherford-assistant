@@ -9,7 +9,7 @@
             "Microsoft.XboxGamingOverlay",
             "Microsoft.GamingApp",
             "Microsoft.BingNews",
-            "Microsoft.Weather",
+            "Microsoft.BingWeather",
             "Microsoft.WindowsMaps",
             "Microsoft.GetHelp",
             "Microsoft.Getstarted",

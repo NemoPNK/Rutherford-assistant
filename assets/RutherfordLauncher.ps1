@@ -129,6 +129,9 @@ $script:NetworkProfilesPath = Join-Path $script:AssetsRoot "config\network-profi
 $script:LauncherConfigPath = Join-Path $script:AssetsRoot "config\launcher.json"
 $script:StateRoot          = "C:\ProgramData\Rutherford"
 $script:StateFilePath      = Join-Path $script:StateRoot "launcher-state.json"
+# Written by Language.ps1 when a restart is required to finish applying the locale.
+# It records the boot time, so the launcher can auto-clear it once the PC has rebooted.
+$script:RebootFlagPath     = Join-Path $script:StateRoot "reboot-required.json"
 
 # ----------------------------------------------------------------------------
 # Runtime config (read from assets/config/launcher.json)
@@ -734,16 +737,63 @@ $script:AuditChecks = Discover-AuditChecks
               <Ellipse Width="16" Height="16" Fill="#1DB6FF" Margin="0,0,10,0" />
               <Ellipse Width="16" Height="16" Fill="#FCBBEB" />
             </StackPanel>
-            <TextBlock Margin="0,16,0,0"
-                       Text="Rutherford Assistant"
-                       FontSize="32"
-                       FontWeight="Bold" />
+            <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+              <TextBlock Text="Rutherford Assistant"
+                         FontSize="32"
+                         FontWeight="Bold"
+                         VerticalAlignment="Center" />
+              <Border Width="22" Height="22"
+                      Margin="14,8,0,0"
+                      CornerRadius="11"
+                      Background="#1DB6FF"
+                      Cursor="Help"
+                      VerticalAlignment="Center"
+                      ToolTipService.InitialShowDelay="120"
+                      ToolTipService.ShowDuration="120000">
+                <Border.ToolTip>
+                  <ToolTip>
+                    <StackPanel MaxWidth="340">
+                      <TextBlock Text="How it works" FontWeight="Bold" FontSize="14" Margin="0,0,0,8" />
+                      <TextBlock TextWrapping="Wrap" FontSize="12"
+                                 Text="1) Run Setup - wallpaper, app cleanup, registry tweaks, OPS folder.&#10;2) Run Language - en-US system locale + US keyboard, removes French.&#10;3) Run Network - rename adapters and apply the IP profiles.&#10;&#10;Keep this window open while a script runs (one at a time).&#10;&#10;ALL GOOD when: Live status shows green badges (Network + Setup audit) and the header says 'System ready'.&#10;&#10;If the header shows 'Restart required', reboot the PC to finish applying the language." />
+                    </StackPanel>
+                  </ToolTip>
+                </Border.ToolTip>
+                <TextBlock Text="i"
+                           Foreground="#FFFFFF"
+                           FontWeight="Bold"
+                           FontSize="14"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center" />
+              </Border>
+            </StackPanel>
             <TextBlock Name="HeroSubtitle"
                        Margin="0,10,0,0"
                        Foreground="#B3B3BC"
                        FontSize="14"
                        TextWrapping="Wrap"
                        Text="Rutherford software" />
+            <Border Name="HeaderStatusBorder"
+                    Margin="0,14,0,0"
+                    HorizontalAlignment="Left"
+                    CornerRadius="14"
+                    Background="#13251A"
+                    BorderBrush="#63B02F"
+                    BorderThickness="1"
+                    Padding="13,5">
+              <StackPanel Orientation="Horizontal">
+                <Ellipse Name="HeaderStatusDot"
+                         Width="9" Height="9"
+                         Fill="#63B02F"
+                         VerticalAlignment="Center"
+                         Margin="0,0,8,0" />
+                <TextBlock Name="HeaderStatusText"
+                           Text="System ready"
+                           FontSize="13"
+                           FontWeight="Bold"
+                           Foreground="#9AE66E" />
+              </StackPanel>
+            </Border>
           </StackPanel>
 
           <Border Grid.Column="1"
@@ -770,6 +820,18 @@ $script:AuditChecks = Discover-AuditChecks
                          Margin="0,6,0,0"
                          FontSize="12"
                          Foreground="#B3B3BC"
+                         Text="" />
+              <TextBlock Text="SERIAL NUMBER"
+                         Margin="0,10,0,0"
+                         FontSize="10"
+                         FontWeight="Bold"
+                         Foreground="#71717A" />
+              <TextBlock Name="SerialNumberText"
+                         Margin="0,2,0,0"
+                         FontSize="13"
+                         FontWeight="Bold"
+                         Foreground="#F4F4F5"
+                         TextWrapping="Wrap"
                          Text="" />
               <TextBlock Name="LastUpdatedText"
                          Margin="0,4,0,0"
@@ -1102,7 +1164,11 @@ $auditChecksPanel    = $window.FindName("AuditChecksPanel")
 $auditSummaryText    = $window.FindName("AuditSummaryText")
 $computerNameText    = $window.FindName("ComputerNameText")
 $computerDateText    = $window.FindName("ComputerDateText")
+$serialNumberText    = $window.FindName("SerialNumberText")
 $lastUpdatedText     = $window.FindName("LastUpdatedText")
+$headerStatusBorder  = $window.FindName("HeaderStatusBorder")
+$headerStatusDot     = $window.FindName("HeaderStatusDot")
+$headerStatusText    = $window.FindName("HeaderStatusText")
 $actionsHelpText     = $window.FindName("ActionsHelpText")
 $progressSegments    = $window.FindName("ProgressSegments")
 $progressPercentText = $window.FindName("ProgressPercentText")
@@ -1114,6 +1180,20 @@ $computerNameText.Text   = $env:COMPUTERNAME
 $stateFileText.Text      = $script:StateFilePath
 $computerDateText.Text   = (Get-Date).ToString("dd MMM yyyy - HH:mm:ss")
 
+# PC serial number (from BIOS). Falls back to "Unavailable" when empty or an OEM placeholder.
+try {
+    $biosSerial = (Get-CimInstance -ClassName Win32_BIOS -ErrorAction Stop).SerialNumber
+    if ($biosSerial) { $biosSerial = ([string]$biosSerial).Trim() }
+    if ([string]::IsNullOrWhiteSpace($biosSerial) -or
+        $biosSerial -match '^(To be filled|System Serial Number|Default string|Not Specified|O\.E\.M\.|0+)$') {
+        $biosSerial = "Unavailable"
+    }
+    $serialNumberText.Text = $biosSerial
+}
+catch {
+    $serialNumberText.Text = "Unavailable"
+}
+
 # ----------------------------------------------------------------------------
 # Color helpers
 # ----------------------------------------------------------------------------
@@ -1121,6 +1201,47 @@ $computerDateText.Text   = (Get-Date).ToString("dd MMM yyyy - HH:mm:ss")
 function Get-Brush {
     param([string]$Hex)
     return [System.Windows.Media.BrushConverter]::new().ConvertFromString($Hex)
+}
+
+# Returns $true if Language.ps1 flagged that a restart is still pending.
+# The flag records the boot time it was written on; if the PC has rebooted since
+# (different boot time), the restart is done, so the stale flag is removed.
+function Get-RebootPending {
+    try {
+        if (-not (Test-Path $script:RebootFlagPath)) { return $false }
+        $flag = Get-Content -Path $script:RebootFlagPath -Raw -ErrorAction Stop | ConvertFrom-Json
+        $currentBoot = (Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime.ToFileTimeUtc()
+        if ([string]$flag.bootId -eq [string]$currentBoot) {
+            return $true
+        }
+        Remove-Item -Path $script:RebootFlagPath -Force -ErrorAction SilentlyContinue
+        return $false
+    }
+    catch {
+        return $false
+    }
+}
+
+# Updates the header status banner: amber "Restart required" or green "System ready".
+function Update-HeaderStatus {
+    if (-not $headerStatusText) { return }
+    try {
+        if (Get-RebootPending) {
+            $headerStatusText.Text         = "Restart required"
+            $headerStatusText.Foreground   = Get-Brush "#FDD800"
+            $headerStatusDot.Fill          = Get-Brush "#FDD800"
+            $headerStatusBorder.Background  = Get-Brush "#332900"
+            $headerStatusBorder.BorderBrush = Get-Brush "#FDD800"
+        }
+        else {
+            $headerStatusText.Text         = "System ready"
+            $headerStatusText.Foreground   = Get-Brush "#9AE66E"
+            $headerStatusDot.Fill          = Get-Brush "#63B02F"
+            $headerStatusBorder.Background  = Get-Brush "#13251A"
+            $headerStatusBorder.BorderBrush = Get-Brush "#63B02F"
+        }
+    }
+    catch { }
 }
 
 # ----------------------------------------------------------------------------
@@ -2283,6 +2404,7 @@ $networkRefreshTimer.Interval = [TimeSpan]::FromSeconds(5)
 $networkRefreshTimer.Add_Tick({
     if (-not $script:IsBusy) {
         try { Refresh-NetworkCards } catch { }
+        try { Update-HeaderStatus } catch { }
     }
 })
 $networkRefreshTimer.Start()
@@ -2328,6 +2450,7 @@ function Handle-TaskCompletion {
             try { Refresh-AuditPanel } catch { Write-CrashLog ("Refresh-AuditPanel error: " + $_.Exception.Message) }
         }
         try { Build-ProgressBar } catch { Write-CrashLog ("Build-ProgressBar error: " + $_.Exception.Message) }
+        try { Update-HeaderStatus } catch { Write-CrashLog ("Update-HeaderStatus error: " + $_.Exception.Message) }
 
         if ($script:State.lastUpdated) {
             try { $lastUpdatedText.Text = "Last update: $($script:State.lastUpdated)" } catch { }
@@ -2405,6 +2528,7 @@ else {
 Refresh-NetworkCards
 Refresh-AuditPanel
 Build-ProgressBar
+Update-HeaderStatus
 Set-Status -TaskText "Ready" -StatusText "Waiting for action."
 
 $window.Add_SourceInitialized({

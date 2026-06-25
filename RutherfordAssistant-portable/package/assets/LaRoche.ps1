@@ -29,60 +29,60 @@ function Ensure-RegistryValue {
     New-ItemProperty -Path $Path -Name $Name -Value $Value -PropertyType $PropertyType -Force | Out-Null
 }
 
-function Ensure-WindowsCapabilityPresent {
-    param([Parameter(Mandatory=$true)][string]$CapabilityName)
-
-    try {
-        $capability = Get-WindowsCapability -Online -Name $CapabilityName -ErrorAction Stop
-        if ($capability.State -eq "Installed") {
-            Write-Host "$CapabilityName already installed."
-            return
-        }
-
-        Write-Host "Installing capability: $CapabilityName"
-        Add-WindowsCapability -Online -Name $CapabilityName -ErrorAction Stop | Out-Null
-        Write-Host "$CapabilityName installed."
-    }
-    catch {
-        Write-Host "Skipping capability $CapabilityName : $($_.Exception.Message)"
-    }
-}
-
-function Remove-WindowsCapabilityIfPresent {
-    param([Parameter(Mandatory=$true)][string]$CapabilityName)
-
-    try {
-        $capability = Get-WindowsCapability -Online -Name $CapabilityName -ErrorAction Stop
-        if ($capability.State -ne "Installed") {
-            Write-Host "$CapabilityName already absent."
-            return
-        }
-
-        Write-Host "Removing capability: $CapabilityName"
-        Remove-WindowsCapability -Online -Name $CapabilityName -ErrorAction Stop | Out-Null
-        Write-Host "$CapabilityName removed."
-    }
-    catch {
-        Write-Host "Skipping removal for $CapabilityName : $($_.Exception.Message)"
-    }
-}
+# Appx removals that failed after retry are collected here and reported in the summary.
+$script:AppxFailures = @()
 
 function Remove-AppxEverywhere {
     param(
         [Parameter(Mandatory=$true)][string]$Name
     )
 
+    $installed   = @(Get-AppxPackage -Name $Name -AllUsers -ErrorAction SilentlyContinue)
+    $provisioned = @(Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq $Name })
+
+    if ($installed.Count -eq 0 -and $provisioned.Count -eq 0) {
+        Write-Host "Appx ${Name}: not present."
+        return
+    }
+
     Write-Host "Removing Appx: $Name ..."
 
-    try {
-        Get-AppxPackage -Name $Name -AllUsers -ErrorAction SilentlyContinue | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue
-    } catch { }
-
-    try {
-        Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -eq $Name } | ForEach-Object {
-            Remove-AppxProvisionedPackage -Online -PackageName $_.PackageName -ErrorAction SilentlyContinue | Out-Null
+    foreach ($attempt in 1..2) {
+        foreach ($pkg in $installed) {
+            try {
+                Remove-AppxPackage -Package $pkg.PackageFullName -AllUsers -ErrorAction Stop
+            }
+            catch {
+                Write-Host "  attempt ${attempt}: $($pkg.PackageFullName): $($_.Exception.Message)"
+            }
         }
-    } catch { }
+
+        foreach ($prov in $provisioned) {
+            try {
+                Remove-AppxProvisionedPackage -Online -PackageName $prov.PackageName -ErrorAction Stop | Out-Null
+            }
+            catch {
+                Write-Host "  attempt ${attempt} (provisioned): $($prov.PackageName): $($_.Exception.Message)"
+            }
+        }
+
+        # Verify instead of assuming success
+        $installed   = @(Get-AppxPackage -Name $Name -AllUsers -ErrorAction SilentlyContinue)
+        $provisioned = @(Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq $Name })
+
+        if ($installed.Count -eq 0 -and $provisioned.Count -eq 0) {
+            Write-Host "Appx ${Name}: removed (verified, attempt $attempt)."
+            return
+        }
+
+        Start-Sleep -Seconds 2
+    }
+
+    $leftover = @()
+    if ($installed.Count -gt 0)   { $leftover += "installed" }
+    if ($provisioned.Count -gt 0) { $leftover += "provisioned" }
+    Write-Host "WARNING Appx ${Name}: STILL PRESENT ($($leftover -join '+')) after 2 attempts."
+    $script:AppxFailures += $Name
 }
 
 # Helper functions for Windows 11 Start menu policy
@@ -97,35 +97,48 @@ function Get-WindowsBuildNumber {
 
 function Set-Windows11StartPolicy {
     $buildNumber = Get-WindowsBuildNumber
-    $startPolicyManagerPath = "HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start"
     $startExplorerPolicyPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer"
-    $startLayoutDirectory = "C:\ProgramData\Rutherford"
-    $startLayoutFile = Join-Path $startLayoutDirectory "StartPins.json"
     $layoutJson = '{"pinnedList":[]}'
-
-    if (-not (Test-Path $startLayoutDirectory)) {
-        New-Item -Path $startLayoutDirectory -ItemType Directory -Force | Out-Null
-    }
-
-    Set-Content -Path $startLayoutFile -Value $layoutJson -Encoding UTF8
-
-    if (-not (Test-Path $startPolicyManagerPath)) {
-        New-Item -Path $startPolicyManagerPath -Force | Out-Null
-    }
 
     if (-not (Test-Path $startExplorerPolicyPath)) {
         New-Item -Path $startExplorerPolicyPath -Force | Out-Null
     }
 
-    New-ItemProperty -Path $startExplorerPolicyPath -Name "HideRecommendedSection" -Value 1 -PropertyType DWord -Force | Out-Null
-
-    if ($buildNumber -ge 26100) {
-        New-ItemProperty -Path $startPolicyManagerPath -Name "ConfigureStartPins" -Value $layoutJson -PropertyType String -Force | Out-Null
-        New-ItemProperty -Path $startExplorerPolicyPath -Name "ConfigureStartPins" -Value $startLayoutFile -PropertyType String -Force | Out-Null
-        Write-Host "Windows 11 Start policy applied: Recommended hidden and Pinned section emptied."
+    # --- Recommended section ---
+    # Per Microsoft Policy CSP doc, HideRecommendedSection is only honored on
+    # Windows 11 22H2 (build 22621) and later. On older builds the value is ignored.
+    if ($buildNumber -ge 22621) {
+        New-ItemProperty -Path $startExplorerPolicyPath -Name "HideRecommendedSection" -Value 1 -PropertyType DWord -Force | Out-Null
+        Write-Host "HideRecommendedSection=1 applied (build $buildNumber)."
     }
     else {
-        Write-Host "Recommended section hidden. Empty pinned layout skipped because ConfigureStartPins is only reliably supported on newer Windows 11 builds."
+        Write-Host "WARNING: build $buildNumber < 22621 - HideRecommendedSection is IGNORED by this Windows version; Recommended section cannot be hidden by policy on this PC."
+    }
+
+    # Best-effort user-level Start toggles (Settings > Personalization > Start), any build:
+    # disable recommendation content and use the 'More pins' layout.
+    Ensure-RegistryValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "Start_IrisRecommendations" -Value 0 -PropertyType DWord
+    Ensure-RegistryValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "Start_Layout" -Value 1 -PropertyType DWord
+    Write-Host "User Start toggles set: recommendations content off, 'More pins' layout."
+
+    # --- Pinned apps ---
+    # Per Microsoft Policy CSP doc, ConfigureStartPins is supported from Windows 11 21H2
+    # (build 22000). The GPO-mapped registry value must contain the JSON itself.
+    if ($buildNumber -ge 22000) {
+        New-ItemProperty -Path $startExplorerPolicyPath -Name "ConfigureStartPins" -Value $layoutJson -PropertyType String -Force | Out-Null
+
+        # Belt-and-suspenders: also seed the MDM PolicyManager entry with the same JSON.
+        $startPolicyManagerPath = "HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start"
+        if (-not (Test-Path $startPolicyManagerPath)) {
+            New-Item -Path $startPolicyManagerPath -Force | Out-Null
+        }
+        New-ItemProperty -Path $startPolicyManagerPath -Name "ConfigureStartPins" -Value $layoutJson -PropertyType String -Force | Out-Null
+        New-ItemProperty -Path $startPolicyManagerPath -Name "ConfigureStartPins_ProviderSet" -Value 1 -PropertyType DWord -Force | Out-Null
+
+        Write-Host "ConfigureStartPins applied with empty pinnedList (build $buildNumber): pinned section emptied."
+    }
+    else {
+        Write-Host "WARNING: build $buildNumber < 22000 - ConfigureStartPins unsupported; pinned apps left as-is."
     }
 }
 
@@ -206,6 +219,58 @@ else {
     Write-Host "cant found wallpaper $wallpaperPath"
 }
 
+# Block silent auto-install of sponsored/suggested apps via Content Delivery Manager.
+# This is what actually prevents removed apps from coming back on Pro edition:
+# the CloudContent policies (DisableWindowsConsumerFeatures) are IGNORED on Pro since Win10 1607.
+Write-Host "Disabling Content Delivery Manager auto-installs..."
+
+$cdmPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"
+$cdmValues = [ordered]@{
+    "ContentDeliveryAllowed"          = 0
+    "FeatureManagementEnabled"        = 0
+    "OemPreInstalledAppsEnabled"      = 0
+    "PreInstalledAppsEnabled"         = 0
+    "PreInstalledAppsEverEnabled"     = 0
+    "SilentInstalledAppsEnabled"      = 0
+    "SoftLandingEnabled"              = 0
+    "SubscribedContentEnabled"        = 0
+    "SubscribedContent-338388Enabled" = 0
+    "SubscribedContent-338389Enabled" = 0
+    "SystemPaneSuggestionsEnabled"    = 0
+}
+
+foreach ($valueName in $cdmValues.Keys) {
+    Ensure-RegistryValue -Path $cdmPath -Name $valueName -Value $cdmValues[$valueName] -PropertyType DWord
+}
+Write-Host "Content Delivery Manager disabled for current user."
+
+# Apply the same values to the Default profile so any future account is covered too.
+$defaultHive = "C:\Users\Default\NTUSER.DAT"
+if (Test-Path $defaultHive) {
+    $hiveLoaded = $false
+    try {
+        reg.exe load "HKU\RutherfordDefault" $defaultHive | Out-Null
+        $hiveLoaded = $true
+        foreach ($valueName in $cdmValues.Keys) {
+            reg.exe add "HKU\RutherfordDefault\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v $valueName /t REG_DWORD /d $cdmValues[$valueName] /f | Out-Null
+        }
+        Write-Host "Content Delivery Manager disabled in Default profile (future accounts)."
+    }
+    catch {
+        Write-Host "Default profile hive update failed: $($_.Exception.Message)"
+    }
+    finally {
+        if ($hiveLoaded) {
+            [gc]::Collect()
+            [gc]::WaitForPendingFinalizers()
+            try { reg.exe unload "HKU\RutherfordDefault" | Out-Null } catch { Write-Host "Hive unload deferred (will release at next reboot)." }
+        }
+    }
+}
+else {
+    Write-Host "Default profile hive not found - skipped."
+}
+
 # Suppression des applications (UWP/Appx) indésirables
 # NOTE: Certaines applis (ex: OneDrive / Office desktop) ne sont pas des Appx et nécessitent un traitement séparé.
 
@@ -234,8 +299,7 @@ $appsToRemove = @(
     "Microsoft.SkypeApp",
 
     "Microsoft.BingNews",
-    "Microsoft.News",
-    "Microsoft.Weather",
+    "Microsoft.BingWeather",
     "Microsoft.WindowsMaps",
     "Microsoft.GetHelp",
     "Microsoft.Getstarted",
@@ -254,7 +318,12 @@ foreach ($app in $appsToRemove) {
     Remove-AppxEverywhere -Name $app
 }
 
-Write-Host "Unwanted Appx application removal complete."
+if ($script:AppxFailures.Count -eq 0) {
+    Write-Host "Unwanted Appx application removal complete: all targets removed or absent (verified)."
+}
+else {
+    Write-Host "Unwanted Appx removal finished with $($script:AppxFailures.Count) FAILURE(S): $($script:AppxFailures -join ', ')"
+}
 
 # Microsoft Store
 $RemoveMicrosoftStore = $false
@@ -364,57 +433,6 @@ foreach ($startupFolder in $startupFolders) {
 
 Write-Host "Startup apps cleanup complete"
 
-Write-Step "Language configuration"
-
-$capabilitiesToInstall = @(
-    "Language.Basic~~~en-US~0.0.1.0",
-    "Language.Handwriting~~~en-US~0.0.1.0",
-    "Language.OCR~~~en-US~0.0.1.0",
-    "Language.Speech~~~en-US~0.0.1.0"
-)
-
-foreach ($capabilityName in $capabilitiesToInstall) {
-    Ensure-WindowsCapabilityPresent -CapabilityName $capabilityName
-}
-
-Set-WinUILanguageOverride -Language en-US
-Set-WinDefaultInputMethodOverride -InputTip "0409:00000409"
-Set-WinUserLanguageList -LanguageList en-US -Force
-
-Set-Culture en-US
-Set-WinSystemLocale en-US
-Set-WinHomeLocation -GeoId 244
-
-$LangList = New-WinUserLanguageList en-US
-$LangList[0].InputMethodTips.Clear()
-$LangList[0].InputMethodTips.Add("0409:00000409")
-Set-WinUserLanguageList $LangList -Force
-
-Copy-UserInternationalSettingsToSystem -WelcomeScreen $true -NewUser $true
-
-Write-Host "Machine is now US"
-
-# Remove French language packs and keep English only
-$englishOnlyList = New-WinUserLanguageList en-US
-$englishOnlyList[0].InputMethodTips.Clear()
-$englishOnlyList[0].InputMethodTips.Add("0409:00000409")
-Set-WinUserLanguageList $englishOnlyList -Force
-
-$capabilitiesToRemove = @(
-    "Language.Basic~~~fr-FR~0.0.1.0",
-    "Language.Handwriting~~~fr-FR~0.0.1.0",
-    "Language.OCR~~~fr-FR~0.0.1.0",
-    "Language.Speech~~~fr-FR~0.0.1.0"
-)
-
-foreach ($capabilityName in $capabilitiesToRemove) {
-    Remove-WindowsCapabilityIfPresent -CapabilityName $capabilityName
-}
-
-Set-WinUILanguageOverride -Language en-US
-
-Write-Host "French removed"
-
 Ensure-RegistryValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "ShowTaskViewButton" -Value 0 -PropertyType DWord
 
 Ensure-RegistryValue -Path "HKCU:\Software\Microsoft\TabletTip\1.7" -Name "EnableDesktopModeAutoInvoke" -Value 1 -PropertyType DWord
@@ -448,7 +466,6 @@ Write-Host "Standby set to never"
 Write-Host "Wallpaper applied"
 Write-Host "Unwanted Appx removed"
 Write-Host "Widget policy disabled"
-Write-Host "Language set to en-US"
 Write-Host "OPS copied to C:\"
 Write-Host "Touch keyboard configured"
 Write-Host "OneDrive removed"
@@ -457,3 +474,7 @@ Write-Host "Startup apps cleaned"
 Write-Host "Final cleanup done"
 Write-Host "Microsoft Store removal toggle available"
 Write-Host "Recommended hidden; pinned section handling applied when supported by Windows 11 build"
+
+if ($script:AppxFailures.Count -gt 0) {
+    Write-Host "WARNING: the following Appx could NOT be removed and need manual attention: $($script:AppxFailures -join ', ')"
+}

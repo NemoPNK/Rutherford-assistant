@@ -103,9 +103,8 @@ function Rename-AdapterIfNeeded {
     }
 
     Rename-NetAdapter -Name $adapter.Name -NewName $NewName -ErrorAction Stop
+    # Let Windows register the rename; Wait-AdapterReady then polls until the new name appears.
     Start-Sleep -Seconds 3
-
-    Start-Sleep -Seconds 2
     return Wait-AdapterReady -Name $NewName -TimeoutSeconds 10
 }
 
@@ -203,19 +202,20 @@ Get-NetAdapter | Format-Table -AutoSize Name, InterfaceDescription, Status, MacA
 
 Write-Step "Starting config"
 
-foreach ($profile in $networkProfiles) {
+# Note: iterate with $netProfile, not $profile - $profile is an automatic PowerShell variable.
+foreach ($netProfile in $networkProfiles) {
     try {
-        $ipv4Mode = if ($profile.Mode -eq "dhcp") { "DHCP" } else { $profile.IPv4 }
+        $ipv4Mode = if ($netProfile.Mode -eq "dhcp") { "DHCP" } else { $netProfile.IPv4 }
 
         Set-NetworkAdapterProfile `
-            -PossibleCurrentNames @($profile.PossibleCurrentNames) `
-            -NewName $profile.NewName `
+            -PossibleCurrentNames @($netProfile.PossibleCurrentNames) `
+            -NewName $netProfile.NewName `
             -IPv4 $ipv4Mode `
-            -SubnetMask $profile.SubnetMask `
-            -DefaultGateway $profile.DefaultGateway
+            -SubnetMask $netProfile.SubnetMask `
+            -DefaultGateway $netProfile.DefaultGateway
     }
     catch {
-        Write-Host "ERROR while configuring $($profile.NewName): $($_.Exception.Message)"
+        Write-Host "ERROR while configuring $($netProfile.NewName): $($_.Exception.Message)"
     }
 }
 

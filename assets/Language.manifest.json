@@ -1,0 +1,9 @@
+{
+  "key": "language",
+  "label": "Run Language",
+  "description": "Set the system language / locale to en-US (US keyboard, US region) and remove other languages. A restart is required to fully apply.",
+  "primary": false,
+  "color": "yellow",
+  "order": 15,
+  "auditAfterRun": true
+}
