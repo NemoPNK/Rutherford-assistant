@@ -311,7 +311,16 @@ $appsToRemove = @(
 
     "Microsoft.MicrosoftOfficeHub",
     "Microsoft.Office.Desktop",
-    "Microsoft.Office.OneNote"
+    "Microsoft.Office.OneNote",
+
+    "5319275A.WhatsAppDesktop",
+
+    "Microsoft.MixedReality.Portal",
+
+    "Microsoft.549981C3F5F10",        # Cortana
+    "Microsoft.PowerAutomateDesktop",
+    "Microsoft.Windows.DevHome",
+    "Microsoft.People"
 )
 
 foreach ($app in $appsToRemove) {

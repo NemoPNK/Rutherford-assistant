@@ -20,7 +20,9 @@
             "Microsoft.ZuneVideo",
             "MSTeams",
             "Microsoft.MicrosoftOfficeHub",
-            "Microsoft.Todos"
+            "Microsoft.Todos",
+            "5319275A.WhatsAppDesktop",
+            "Microsoft.MixedReality.Portal"
         )
 
         try {
