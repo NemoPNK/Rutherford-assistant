@@ -22,7 +22,11 @@
             "Microsoft.MicrosoftOfficeHub",
             "Microsoft.Todos",
             "5319275A.WhatsAppDesktop",
-            "Microsoft.MixedReality.Portal"
+            "Microsoft.MixedReality.Portal",
+            "Microsoft.YourPhone",
+            "Microsoft.Copilot",
+            "Microsoft.BingSearch",
+            "king.com.CandyCrushSaga"
         )
 
         try {

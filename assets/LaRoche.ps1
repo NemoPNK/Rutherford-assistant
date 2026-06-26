@@ -320,7 +320,24 @@ $appsToRemove = @(
     "Microsoft.549981C3F5F10",        # Cortana
     "Microsoft.PowerAutomateDesktop",
     "Microsoft.Windows.DevHome",
-    "Microsoft.People"
+    "Microsoft.People",
+
+    "Microsoft.YourPhone",                      # Phone Link
+    "MicrosoftWindows.Client.WebExperience",    # Widgets host
+    "Microsoft.Copilot",
+    "Microsoft.BingSearch",                     # web search in Start
+    "Microsoft.WindowsSoundRecorder",
+    "Microsoft.MicrosoftJournal",
+    "MicrosoftCorporationII.MicrosoftFamily",
+    "MicrosoftCorporationII.QuickAssist",
+
+    # Games (preinstalled / OEM)
+    "king.com.CandyCrushSaga",
+    "king.com.CandyCrushSodaSaga",
+    "king.com.BubbleWitch3Saga",
+    "king.com.FarmHeroesSaga",
+    "A278AB0D.DisneyMagicKingdoms",
+    "Microsoft.MinecraftUWP"
 )
 
 foreach ($app in $appsToRemove) {
