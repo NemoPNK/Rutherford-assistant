@@ -697,9 +697,9 @@ $script:AuditChecks = Discover-AuditChecks
     </Style>
 
     <Style x:Key="RoundedSecondaryButton" TargetType="Button" BasedOn="{StaticResource RoundedButton}">
-      <Setter Property="Background" Value="#FFFFFF" />
-      <Setter Property="Foreground" Value="#0A0A0A" />
-      <Setter Property="BorderBrush" Value="#E5E7EB" />
+      <Setter Property="Background" Value="#16171A" />
+      <Setter Property="Foreground" Value="#E4E4E7" />
+      <Setter Property="BorderBrush" Value="#3A3A3E" />
       <Setter Property="BorderThickness" Value="1" />
       <Setter Property="FontWeight" Value="Bold" />
       <Setter Property="Height" Value="42" />
@@ -920,8 +920,8 @@ $script:AuditChecks = Discover-AuditChecks
 
       <!-- ================ PROGRESS SEGMENTED BAR ================ -->
       <Border Grid.Row="2"
-              Background="#FFFFFF"
-              BorderBrush="#E5E7EB"
+              Background="#16171A"
+              BorderBrush="#232326"
               BorderThickness="1"
               CornerRadius="22"
               Padding="20">
@@ -974,8 +974,8 @@ $script:AuditChecks = Discover-AuditChecks
       <StackPanel Grid.Row="4">
 
         <!-- Steps card: Run all + tiles + secondary controls -->
-        <Border Background="#FFFFFF"
-                BorderBrush="#E5E7EB"
+        <Border Background="#16171A"
+                BorderBrush="#232326"
                 BorderThickness="1"
                 CornerRadius="22"
                 Padding="20">
@@ -987,7 +987,7 @@ $script:AuditChecks = Discover-AuditChecks
               </Grid.ColumnDefinitions>
               <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
                 <TextBlock Text="Steps"
-                           Foreground="#111111"
+                           Foreground="#F4F4F5"
                            FontSize="20"
                            FontWeight="Bold"
                            VerticalAlignment="Center" />
@@ -1020,7 +1020,7 @@ $script:AuditChecks = Discover-AuditChecks
 
             <TextBlock Name="ActionsHelpText"
                        Margin="0,6,0,14"
-                       Foreground="#52525B"
+                       Foreground="#A1A1AA"
                        FontSize="12"
                        TextWrapping="Wrap"
                        Text="One tile per script discovered in assets." />
@@ -1058,7 +1058,7 @@ $script:AuditChecks = Discover-AuditChecks
 
             <TextBlock Name="ReportSummaryText"
                        Margin="0,12,0,0"
-                       Foreground="#52525B"
+                       Foreground="#A1A1AA"
                        FontSize="12"
                        TextWrapping="Wrap"
                        Text="No report yet." />
@@ -1082,8 +1082,8 @@ $script:AuditChecks = Discover-AuditChecks
           </Grid.ColumnDefinitions>
 
           <Border Grid.Column="0"
-                  Background="#FFFFFF"
-                  BorderBrush="#E5E7EB"
+                  Background="#16171A"
+                  BorderBrush="#232326"
                   BorderThickness="1"
                   CornerRadius="22"
                   Padding="14,8">
@@ -1091,7 +1091,7 @@ $script:AuditChecks = Discover-AuditChecks
               <Expander.Header>
                 <StackPanel Orientation="Horizontal">
                   <TextBlock Text="Setup checklist"
-                             Foreground="#111111"
+                             Foreground="#F4F4F5"
                              FontSize="16"
                              FontWeight="Bold"
                              VerticalAlignment="Center" />
@@ -1112,8 +1112,8 @@ $script:AuditChecks = Discover-AuditChecks
           </Border>
 
           <Border Grid.Column="2"
-                  Background="#FFFFFF"
-                  BorderBrush="#E5E7EB"
+                  Background="#16171A"
+                  BorderBrush="#232326"
                   BorderThickness="1"
                   CornerRadius="22"
                   Padding="14,8">
@@ -1121,7 +1121,7 @@ $script:AuditChecks = Discover-AuditChecks
               <Expander.Header>
                 <StackPanel Orientation="Horizontal">
                   <TextBlock Text="Network"
-                             Foreground="#111111"
+                             Foreground="#F4F4F5"
                              FontSize="16"
                              FontWeight="Bold"
                              VerticalAlignment="Center" />
@@ -1396,7 +1396,7 @@ function Apply-StatusVisual {
             $Text.Foreground   = Get-Brush "#B91C1C"
         }
         default {
-            $Border.Background = Get-Brush "#E5E7EB"
+            $Border.Background = Get-Brush "#232326"
             $Text.Foreground   = Get-Brush "#374151"
         }
     }
@@ -1600,7 +1600,7 @@ function Add-NetworkCardElement {
     $border.CornerRadius = [System.Windows.CornerRadius]::new(10)
     $border.Padding = [System.Windows.Thickness]::new(14, 8, 14, 8)
     $border.Margin = [System.Windows.Thickness]::new(0, 0, 0, 6)
-    $border.Background = Get-Brush "#FAFAFA"
+    $border.Background = Get-Brush "#16171A"
 
     $grid = New-Object System.Windows.Controls.Grid
     $border.Child = $grid
@@ -1630,7 +1630,7 @@ function Add-NetworkCardElement {
     $nameText.Text = $Snapshot.Name
     $nameText.FontWeight = "Bold"
     $nameText.FontSize = 14
-    $nameText.Foreground = Get-Brush "#111111"
+    $nameText.Foreground = Get-Brush "#F4F4F5"
     $nameText.VerticalAlignment = "Center"
     [void]$leftStack.Children.Add($nameText)
 
@@ -1646,7 +1646,7 @@ function Add-NetworkCardElement {
         ""
     }
     $detailText.FontSize = 12
-    $detailText.Foreground = Get-Brush "#52525B"
+    $detailText.Foreground = Get-Brush "#A1A1AA"
     $detailText.VerticalAlignment = "Center"
     $detailText.Margin = [System.Windows.Thickness]::new(0, 0, 12, 0)
     $detailText.ToolTip = $Snapshot.Detail
@@ -1733,8 +1733,8 @@ function Add-AuditCardElement {
     $border.BorderThickness = [System.Windows.Thickness]::new(1)
     $border.Padding = [System.Windows.Thickness]::new(14, 10, 14, 10)
     $border.Margin = [System.Windows.Thickness]::new(0, 0, 0, 8)
-    $border.Background = Get-Brush "#FAFAFA"
-    $border.BorderBrush = Get-Brush "#E5E7EB"
+    $border.Background = Get-Brush "#16171A"
+    $border.BorderBrush = Get-Brush "#232326"
 
     $grid = New-Object System.Windows.Controls.Grid
     $border.Child = $grid
@@ -1752,13 +1752,13 @@ function Add-AuditCardElement {
     $labelText.Text = $Check.Label
     $labelText.FontWeight = "Bold"
     $labelText.FontSize = 14
-    $labelText.Foreground = Get-Brush "#111111"
+    $labelText.Foreground = Get-Brush "#F4F4F5"
     [void]$textStack.Children.Add($labelText)
 
     $detailText = New-Object System.Windows.Controls.TextBlock
     $detailText.Text = if ($Result.Detail) { [string]$Result.Detail } else { "" }
     $detailText.Margin = [System.Windows.Thickness]::new(0, 4, 0, 0)
-    $detailText.Foreground = Get-Brush "#52525B"
+    $detailText.Foreground = Get-Brush "#A1A1AA"
     $detailText.TextWrapping = "Wrap"
     [void]$textStack.Children.Add($detailText)
 
@@ -1797,7 +1797,7 @@ function Refresh-AuditPanel {
         if (-not $script:AuditChecks -or $script:AuditChecks.Count -eq 0) {
             $emptyText = New-Object System.Windows.Controls.TextBlock
             $emptyText.Text = "No audit check found in assets\checks. Drop a *.check.ps1 file there to add one."
-            $emptyText.Foreground = Get-Brush "#52525B"
+            $emptyText.Foreground = Get-Brush "#A1A1AA"
             $emptyText.TextWrapping = "Wrap"
             [void]$auditChecksPanel.Children.Add($emptyText)
             $auditSummaryText.Text = "0 / 0"
