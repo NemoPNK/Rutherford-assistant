@@ -22,11 +22,32 @@ function Ensure-RegistryValue {
         [Parameter(Mandatory=$true)][string]$PropertyType
     )
 
-    if (-not (Test-Path $Path)) {
-        New-Item -Path $Path -Force | Out-Null
+    # Idempotent (New-ItemProperty -Force overwrites) and non-blocking: a single
+    # registry failure is logged and skipped instead of aborting the whole setup.
+    try {
+        if (-not (Test-Path $Path)) {
+            New-Item -Path $Path -Force | Out-Null
+        }
+        New-ItemProperty -Path $Path -Name $Name -Value $Value -PropertyType $PropertyType -Force | Out-Null
     }
+    catch {
+        Write-Host "Registry write skipped ($Path\$Name): $($_.Exception.Message)"
+    }
+}
 
-    New-ItemProperty -Path $Path -Name $Name -Value $Value -PropertyType $PropertyType -Force | Out-Null
+# Runs a setup section in isolation: if it throws, the error is logged and the
+# script continues with the next section instead of aborting everything.
+function Invoke-Step {
+    param(
+        [Parameter(Mandatory=$true)][string]$Name,
+        [Parameter(Mandatory=$true)][scriptblock]$Action
+    )
+    try {
+        & $Action
+    }
+    catch {
+        Write-Host "STEP FAILED [$Name]: $($_.Exception.Message) - continuing with the next step."
+    }
 }
 
 # Appx removals that failed after retry are collected here and reported in the summary.
@@ -148,6 +169,7 @@ if (-not (Test-IsAdmin)) {
 }
 
 # Copy folder preinstall/OPS to C:\
+Invoke-Step "OPS folder copy" {
 $sourcePath = Join-Path $PSScriptRoot "preinstall/OPS"
 $destinationPath = "C:\OPS"
 
@@ -178,6 +200,7 @@ if (Test-Path $sourcePath) {
 else {
     Write-Host "Source folder not found: $sourcePath"
 }
+}
 
 # Désactivation de la veille
 powercfg /change standby-timeout-ac 0
@@ -187,6 +210,7 @@ powercfg /change monitor-timeout-dc 0
 powercfg /hibernate off
 
 # Wallpaper
+Invoke-Step "Wallpaper" {
 $wallpaperPath = Join-Path $PSScriptRoot "wallpaper.jpg"
 $localWallpaperDirectory = "C:\ProgramData\Rutherford"
 $localWallpaperPath = Join-Path $localWallpaperDirectory "wallpaper.jpg"
@@ -217,6 +241,7 @@ public class Wallpaper {
 }
 else {
     Write-Host "cant found wallpaper $wallpaperPath"
+}
 }
 
 # Block silent auto-install of sponsored/suggested apps via Content Delivery Manager.
@@ -362,10 +387,11 @@ if ($RemoveMicrosoftStore) {
 Ensure-RegistryValue -Path "HKLM:\Software\Policies\Microsoft\Dsh" -Name "AllowNewsAndInterests" -Value 0 -PropertyType DWord
 Write-Host "Widjet removed"
 
-Set-Windows11StartPolicy
+Invoke-Step "Start menu policy" { Set-Windows11StartPolicy }
 Write-Host "Start menu policy processed."
 
 # Uninstall OneDrive (non-Appx)
+Invoke-Step "OneDrive removal" {
 Write-Host "Uninstalling OneDrive..."
 try {
     Stop-Process -Name OneDrive -Force -ErrorAction SilentlyContinue
@@ -386,6 +412,7 @@ Remove-Item -Path "$env:LOCALAPPDATA\Microsoft\OneDrive" -Recurse -Force -ErrorA
 Remove-Item -Path "$env:PROGRAMDATA\Microsoft OneDrive" -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -Path "$env:SYSTEMDRIVE\OneDriveTemp" -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "OneDrive removal complete."
+}
 
 # Disable some Windows features / consumer experiences
 Ensure-RegistryValue -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent" -Name "DisableConsumerFeatures" -Value 1 -PropertyType DWord
@@ -397,6 +424,7 @@ Ensure-RegistryValue -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCop
 Write-Host "Windows consumer features blocked"
 
 # Disable common startup apps for current user
+Invoke-Step "Startup apps cleanup" {
 $startupRegistryPaths = @(
     "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run",
     "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run"
@@ -458,6 +486,7 @@ foreach ($startupFolder in $startupFolders) {
 }
 
 Write-Host "Startup apps cleanup complete"
+}
 
 Ensure-RegistryValue -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "ShowTaskViewButton" -Value 0 -PropertyType DWord
 

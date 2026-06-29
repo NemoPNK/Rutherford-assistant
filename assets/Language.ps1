@@ -195,8 +195,12 @@ try {
 
     # Actually change the OS display language (welcome screen, system accounts) - Win11
     if (Get-Command Set-SystemPreferredUILanguage -ErrorAction SilentlyContinue) {
+        $prevPreferred = $null
+        try { $prevPreferred = Get-SystemPreferredUILanguage } catch { }
         Set-SystemPreferredUILanguage $targetLanguage
-        $rebootNeeded = $true
+        # Only a real change needs a restart - keeps re-runs idempotent: re-running on an
+        # already-configured machine no longer falsely demands a reboot.
+        if ("$prevPreferred" -ne $targetLanguage) { $rebootNeeded = $true }
     }
 
     # Propagate to welcome screen and new users (Windows 11 22H2+; skipped on older builds)
