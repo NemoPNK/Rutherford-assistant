@@ -856,6 +856,18 @@ $script:AuditChecks = Discover-AuditChecks
                            Foreground="#9AE66E" />
               </StackPanel>
             </Border>
+            <Button Name="RestartButton"
+                    Visibility="Collapsed"
+                    Margin="0,10,0,0"
+                    HorizontalAlignment="Left"
+                    Style="{StaticResource RoundedButton}"
+                    Height="40"
+                    Background="#FDD800"
+                    Foreground="#0A0A0A"
+                    BorderThickness="0"
+                    FontWeight="Bold"
+                    Padding="18,0"
+                    Content="Restart now" />
           </StackPanel>
 
           <Border Grid.Column="1"
@@ -958,80 +970,11 @@ $script:AuditChecks = Discover-AuditChecks
         </StackPanel>
       </Border>
 
-      <!-- ================ MAIN BODY: Actions left + Live status right ================ -->
-      <Grid Grid.Row="4">
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="380" />
-          <ColumnDefinition Width="18" />
-          <ColumnDefinition Width="*" />
-        </Grid.ColumnDefinitions>
+      <!-- ================ MAIN BODY: kiosk tiles + dropdowns ================ -->
+      <StackPanel Grid.Row="4">
 
-        <!-- Actions panel (left) -->
-        <Border Grid.Column="0"
-                Background="#FFFFFF"
-                BorderBrush="#E5E7EB"
-                BorderThickness="1"
-                CornerRadius="22"
-                Padding="20">
-          <StackPanel>
-            <TextBlock Text="Actions"
-                       Foreground="#111111"
-                       FontSize="20"
-                       FontWeight="Bold" />
-            <TextBlock Name="ActionsHelpText"
-                       Margin="0,6,0,0"
-                       Foreground="#52525B"
-                       TextWrapping="Wrap"
-                       Text="One button per script discovered in assets." />
-
-            <StackPanel Name="ActionsPanel" Margin="0,16,0,0" />
-
-            <Button Name="OpenReportButton"
-                    Style="{StaticResource RoundedSecondaryButton}"
-                    Margin="0,22,0,0"
-                    IsEnabled="False"
-                    Content="Open Last Report" />
-
-            <Button Name="RefreshNetworkButton"
-                    Style="{StaticResource RoundedSecondaryButton}"
-                    Margin="0,10,0,0"
-                    Content="Refresh All Status" />
-
-            <Button Name="RefreshAuditButton"
-                    Style="{StaticResource RoundedSecondaryButton}"
-                    Margin="0,10,0,0"
-                    Visibility="Collapsed"
-                    Content="Refresh Setup Audit" />
-
-            <Button Name="ClearLogsButton"
-                    Style="{StaticResource RoundedSecondaryButton}"
-                    Margin="0,10,0,0"
-                    Content="Clear Logs" />
-
-            <TextBlock Margin="0,20,0,0"
-                       Foreground="#71717A"
-                       FontSize="12"
-                       FontWeight="Bold"
-                       Text="CURRENT REPORT" />
-            <TextBlock Name="ReportSummaryText"
-                       Margin="0,6,0,0"
-                       Foreground="#52525B"
-                       FontSize="12"
-                       TextWrapping="Wrap"
-                       Text="No report yet." />
-
-            <TextBlock Name="StateFileText"
-                       Margin="0,12,0,0"
-                       Foreground="#A1A1AA"
-                       FontSize="10"
-                       TextWrapping="Wrap"
-                       Text="" />
-          </StackPanel>
-        </Border>
-
-        <!-- Live Status panel (right) - combines Network + Audit -->
-        <Border Grid.Column="2"
-                Background="#FFFFFF"
+        <!-- Steps card: Run all + tiles + secondary controls -->
+        <Border Background="#FFFFFF"
                 BorderBrush="#E5E7EB"
                 BorderThickness="1"
                 CornerRadius="22"
@@ -1042,100 +985,163 @@ $script:AuditChecks = Discover-AuditChecks
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
               </Grid.ColumnDefinitions>
-              <TextBlock Grid.Column="0"
-                         Text="Live status"
-                         Foreground="#111111"
-                         FontSize="20"
-                         FontWeight="Bold" />
-              <Border Grid.Column="1"
-                      VerticalAlignment="Center"
-                      CornerRadius="16"
-                      Background="#DCFCE7"
-                      BorderBrush="#63B02F"
-                      BorderThickness="2"
-                      Padding="14,4">
-                <TextBlock Name="LiveStatusOkText"
-                           FontSize="14"
+              <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock Text="Steps"
+                           Foreground="#111111"
+                           FontSize="20"
                            FontWeight="Bold"
-                           Foreground="#166534"
-                           Text="0 / 0 OK" />
-              </Border>
+                           VerticalAlignment="Center" />
+                <Border Margin="12,0,0,0"
+                        VerticalAlignment="Center"
+                        CornerRadius="14"
+                        Background="#DCFCE7"
+                        BorderBrush="#63B02F"
+                        BorderThickness="2"
+                        Padding="12,3">
+                  <TextBlock Name="LiveStatusOkText"
+                             FontSize="13"
+                             FontWeight="Bold"
+                             Foreground="#166534"
+                             Text="0 / 0 OK" />
+                </Border>
+              </StackPanel>
+              <Button Grid.Column="1"
+                      Name="RunAllButton"
+                      Style="{StaticResource RoundedButton}"
+                      Height="44"
+                      FontWeight="Bold"
+                      FontSize="14"
+                      Background="#FCBBEB"
+                      Foreground="#4B1528"
+                      BorderThickness="0"
+                      Padding="20,0"
+                      Content="Run all steps" />
             </Grid>
 
-            <!-- Hidden text used by Set-Status for the execution banner -->
-            <TextBlock Name="CurrentTaskText"
-                       Visibility="Collapsed"
-                       Text="Ready" />
-            <TextBlock Name="CurrentStatusText"
-                       Visibility="Collapsed"
-                       Text="Waiting for action." />
+            <TextBlock Name="ActionsHelpText"
+                       Margin="0,6,0,14"
+                       Foreground="#52525B"
+                       FontSize="12"
+                       TextWrapping="Wrap"
+                       Text="One tile per script discovered in assets." />
 
-            <!-- Network section header -->
-            <Border Margin="0,16,0,0"
-                    CornerRadius="8"
-                    Background="#E6F4FF"
-                    Padding="0">
-              <Grid Height="28">
-                <Grid.ColumnDefinitions>
-                  <ColumnDefinition Width="6" />
-                  <ColumnDefinition Width="*" />
-                  <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <Rectangle Grid.Column="0" Fill="#1DB6FF" />
-                <TextBlock Grid.Column="1"
-                           Margin="14,0,0,0"
-                           VerticalAlignment="Center"
-                           Text="NETWORK CARDS"
-                           Foreground="#0C447C"
-                           FontSize="13"
-                           FontWeight="Bold" />
-                <TextBlock Grid.Column="2"
-                           Margin="0,0,14,0"
-                           VerticalAlignment="Center"
-                           Name="NetworkSummaryText"
-                           Foreground="#0C447C"
-                           FontSize="12"
-                           FontWeight="Bold"
-                           Text="0 / 0" />
-              </Grid>
-            </Border>
+            <UniformGrid Name="ActionsPanel" Columns="3" />
 
-            <StackPanel Name="NetworkCardsPanel" Margin="0,8,0,0" />
+            <Grid Margin="0,16,0,0">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="10" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="10" />
+                <ColumnDefinition Width="*" />
+              </Grid.ColumnDefinitions>
+              <Button Grid.Column="0"
+                      Name="OpenReportButton"
+                      Style="{StaticResource RoundedSecondaryButton}"
+                      IsEnabled="False"
+                      Content="Open Last Report" />
+              <Button Grid.Column="2"
+                      Name="RefreshNetworkButton"
+                      Style="{StaticResource RoundedSecondaryButton}"
+                      Content="Refresh All Status" />
+              <Button Grid.Column="4"
+                      Name="ClearLogsButton"
+                      Style="{StaticResource RoundedSecondaryButton}"
+                      Content="Clear Logs" />
+            </Grid>
 
-            <!-- Audit section header -->
-            <Border Margin="0,16,0,0"
-                    CornerRadius="8"
-                    Background="#EAF6E0"
-                    Padding="0">
-              <Grid Height="28">
-                <Grid.ColumnDefinitions>
-                  <ColumnDefinition Width="6" />
-                  <ColumnDefinition Width="*" />
-                  <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <Rectangle Grid.Column="0" Fill="#63B02F" />
-                <TextBlock Grid.Column="1"
-                           Margin="14,0,0,0"
-                           VerticalAlignment="Center"
-                           Text="SETUP AUDIT"
-                           Foreground="#1F4D11"
-                           FontSize="13"
-                           FontWeight="Bold" />
-                <TextBlock Grid.Column="2"
-                           Margin="0,0,14,0"
-                           VerticalAlignment="Center"
-                           Name="AuditSummaryText"
-                           Foreground="#1F4D11"
-                           FontSize="12"
-                           FontWeight="Bold"
-                           Text="0 / 0" />
-              </Grid>
-            </Border>
+            <Button Name="RefreshAuditButton"
+                    Style="{StaticResource RoundedSecondaryButton}"
+                    Margin="0,10,0,0"
+                    Visibility="Collapsed"
+                    Content="Refresh Setup Audit" />
 
-            <StackPanel Name="AuditChecksPanel" Margin="0,8,0,0" />
+            <TextBlock Name="ReportSummaryText"
+                       Margin="0,12,0,0"
+                       Foreground="#52525B"
+                       FontSize="12"
+                       TextWrapping="Wrap"
+                       Text="No report yet." />
+            <TextBlock Name="StateFileText"
+                       Margin="0,8,0,0"
+                       Foreground="#A1A1AA"
+                       FontSize="10"
+                       TextWrapping="Wrap"
+                       Text="" />
+            <TextBlock Name="CurrentTaskText" Visibility="Collapsed" Text="Ready" />
+            <TextBlock Name="CurrentStatusText" Visibility="Collapsed" Text="Waiting for action." />
           </StackPanel>
         </Border>
-      </Grid>
+
+        <!-- Dropdowns: Setup checklist + Network -->
+        <Grid Margin="0,18,0,0">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="18" />
+            <ColumnDefinition Width="*" />
+          </Grid.ColumnDefinitions>
+
+          <Border Grid.Column="0"
+                  Background="#FFFFFF"
+                  BorderBrush="#E5E7EB"
+                  BorderThickness="1"
+                  CornerRadius="22"
+                  Padding="14,8">
+            <Expander IsExpanded="True">
+              <Expander.Header>
+                <StackPanel Orientation="Horizontal">
+                  <TextBlock Text="Setup checklist"
+                             Foreground="#111111"
+                             FontSize="16"
+                             FontWeight="Bold"
+                             VerticalAlignment="Center" />
+                  <Border Margin="10,0,0,0"
+                          CornerRadius="10"
+                          Background="#EAF6E0"
+                          Padding="9,2">
+                    <TextBlock Name="AuditSummaryText"
+                               Foreground="#1F4D11"
+                               FontSize="12"
+                               FontWeight="Bold"
+                               Text="0 / 0" />
+                  </Border>
+                </StackPanel>
+              </Expander.Header>
+              <StackPanel Name="AuditChecksPanel" Margin="0,10,0,6" />
+            </Expander>
+          </Border>
+
+          <Border Grid.Column="2"
+                  Background="#FFFFFF"
+                  BorderBrush="#E5E7EB"
+                  BorderThickness="1"
+                  CornerRadius="22"
+                  Padding="14,8">
+            <Expander IsExpanded="True">
+              <Expander.Header>
+                <StackPanel Orientation="Horizontal">
+                  <TextBlock Text="Network"
+                             Foreground="#111111"
+                             FontSize="16"
+                             FontWeight="Bold"
+                             VerticalAlignment="Center" />
+                  <Border Margin="10,0,0,0"
+                          CornerRadius="10"
+                          Background="#E6F4FF"
+                          Padding="9,2">
+                    <TextBlock Name="NetworkSummaryText"
+                               Foreground="#0C447C"
+                               FontSize="12"
+                               FontWeight="Bold"
+                               Text="0 / 0" />
+                  </Border>
+                </StackPanel>
+              </Expander.Header>
+              <StackPanel Name="NetworkCardsPanel" Margin="0,10,0,6" />
+            </Expander>
+          </Border>
+        </Grid>
+      </StackPanel>
 
       <!-- ================ LIVE LOGS (full width, dark) ================ -->
       <Border Grid.Row="6"
@@ -1234,10 +1240,53 @@ $headerStatusDot     = $window.FindName("HeaderStatusDot")
 $headerStatusText    = $window.FindName("HeaderStatusText")
 $infoButton          = $window.FindName("InfoButton")
 $infoPopup           = $window.FindName("InfoPopup")
+$runAllButton        = $window.FindName("RunAllButton")
+$restartButton       = $window.FindName("RestartButton")
 
 # Clickable "how it works" tutorial: toggle the info popup on click.
 if ($infoButton -and $infoPopup) {
     $infoButton.Add_MouseLeftButtonUp({ $infoPopup.IsOpen = -not $infoPopup.IsOpen })
+}
+
+# Queue used by "Run all" to chain Setup -> Language -> Network one at a time.
+$script:RunQueue = New-Object System.Collections.Generic.Queue[string]
+
+if ($runAllButton) {
+    $runAllButton.Add_Click({
+        if ($script:IsBusy) { return }
+        try {
+            $script:RunQueue.Clear()
+            foreach ($t in $script:Tasks) { $script:RunQueue.Enqueue([string]$t.Key) }
+            if ($script:RunQueue.Count -gt 0) {
+                Append-LogLine "Run all: starting the full sequence..."
+                $nextKey = $script:RunQueue.Dequeue()
+                Start-TaskExecutionFileMode -TaskKey $nextKey
+            }
+        }
+        catch {
+            try { Append-LogLine ("Run all error: " + $_.Exception.Message) } catch { }
+            try { Set-ControlsBusyState -Busy $false } catch { }
+        }
+    })
+}
+
+if ($restartButton) {
+    $restartButton.Add_Click({
+        try {
+            $answer = [System.Windows.MessageBox]::Show(
+                "Restart this PC now?`n`nThe language change will be fully applied after the restart.",
+                "Rutherford Assistant - Restart",
+                [System.Windows.MessageBoxButton]::YesNo,
+                [System.Windows.MessageBoxImage]::Warning)
+            if ($answer -eq [System.Windows.MessageBoxResult]::Yes) {
+                Append-LogLine "Operator confirmed restart. Rebooting..."
+                Restart-Computer -Force
+            }
+        }
+        catch {
+            try { Append-LogLine ("Restart error: " + $_.Exception.Message) } catch { }
+        }
+    })
 }
 $actionsHelpText     = $window.FindName("ActionsHelpText")
 $progressSegments    = $window.FindName("ProgressSegments")
@@ -1304,6 +1353,7 @@ function Update-HeaderStatus {
             $headerStatusBorder.Background  = Get-Brush "#3A2E00"
             $headerStatusBorder.BorderBrush = Get-Brush "#FDD800"
             $headerStatusBorder.BorderThickness = [System.Windows.Thickness]::new(2)
+            if ($restartButton) { $restartButton.Visibility = "Visible" }
         }
         else {
             $headerStatusText.Text         = "System ready"
@@ -1313,6 +1363,7 @@ function Update-HeaderStatus {
             $headerStatusBorder.Background  = Get-Brush "#13251A"
             $headerStatusBorder.BorderBrush = Get-Brush "#63B02F"
             $headerStatusBorder.BorderThickness = [System.Windows.Thickness]::new(1)
+            if ($restartButton) { $restartButton.Visibility = "Collapsed" }
         }
     }
     catch { }
@@ -1384,6 +1435,25 @@ function Set-ControlsBusyState {
     $refreshAuditButton.IsEnabled   = -not $Busy
     $clearLogsButton.IsEnabled      = -not $Busy
     $openReportButton.IsEnabled     = (-not $Busy) -and [bool]$script:LastReportPath
+    if ($runAllButton) { $runAllButton.IsEnabled = -not $Busy }
+
+    # Header banner: make it obvious not to touch the PC while a script runs.
+    try {
+        if ($Busy -and $headerStatusText) {
+            $headerStatusText.Text          = "WORKING - DO NOT TOUCH"
+            $headerStatusText.FontSize       = 16
+            $headerStatusText.Foreground    = Get-Brush "#7FD3FF"
+            $headerStatusDot.Fill           = Get-Brush "#1DB6FF"
+            $headerStatusBorder.Background   = Get-Brush "#0E1A24"
+            $headerStatusBorder.BorderBrush  = Get-Brush "#1DB6FF"
+            $headerStatusBorder.BorderThickness = [System.Windows.Thickness]::new(2)
+            if ($restartButton) { $restartButton.Visibility = "Collapsed" }
+        }
+        elseif (-not $Busy) {
+            Update-HeaderStatus
+        }
+    }
+    catch { }
 }
 
 # ----------------------------------------------------------------------------
@@ -1404,50 +1474,49 @@ function Build-ActionButtons {
 
     $actionsHelpText.Text = "$($script:Tasks.Count) script(s) discovered in assets."
 
-    $first = $true
     foreach ($task in $script:Tasks) {
-        $row = New-Object System.Windows.Controls.Grid
-        if (-not $first) { $row.Margin = [System.Windows.Thickness]::new(0, 14, 0, 0) }
-
-        $colMain = New-Object System.Windows.Controls.ColumnDefinition
-        [void]$row.ColumnDefinitions.Add($colMain)
-        $colStatus = New-Object System.Windows.Controls.ColumnDefinition
-        $colStatus.Width = [System.Windows.GridLength]::new(120)
-        [void]$row.ColumnDefinitions.Add($colStatus)
-
-        # ColorLoop accent button. Choose color via manifest field; default to green for primary, blue otherwise.
+        # ColorLoop accent tile. Choose color via manifest field; default to green for primary, blue otherwise.
         $colorName = if ($task.Color) { [string]$task.Color } elseif ($task.Primary) { "green" } else { "blue" }
         $accent = Get-ColorLoopAccent -Name $colorName
 
+        # Big touch tile: the whole tile is the clickable button.
         $button = New-Object System.Windows.Controls.Button
         $button.Style = $window.FindResource("RoundedButton")
-        $button.Height = 56
-        $button.FontWeight = "Bold"
-        $button.FontSize   = 15
-        $button.Content    = $task.Label
+        $button.Height = 122
+        $button.Margin = [System.Windows.Thickness]::new(6)
         $button.Background = Get-Brush $accent.Bg
         $button.Foreground = Get-Brush $accent.Fg
         $button.BorderThickness = [System.Windows.Thickness]::new(0)
-        # NOTE: drop-shadow effect intentionally removed - was suspected
-        # to cause ps2exe rendering crashes on click.
         if ($task.Description) { $button.ToolTip = $task.Description }
-        [System.Windows.Controls.Grid]::SetColumn($button, 0)
-        [void]$row.Children.Add($button)
 
+        $tileStack = New-Object System.Windows.Controls.StackPanel
+        $tileStack.HorizontalAlignment = "Center"
+        $tileStack.VerticalAlignment   = "Center"
+
+        $nameText = New-Object System.Windows.Controls.TextBlock
+        $nameText.Text = ($task.Label -replace "^Run\s+", "")
+        $nameText.FontSize = 18
+        $nameText.FontWeight = "Bold"
+        $nameText.HorizontalAlignment = "Center"
+        [void]$tileStack.Children.Add($nameText)
+
+        # State pill at the bottom of the tile - reused by the existing state machine.
         $statusBorder = New-Object System.Windows.Controls.Border
-        $statusBorder.Margin = [System.Windows.Thickness]::new(12, 0, 0, 0)
-        $statusBorder.CornerRadius = [System.Windows.CornerRadius]::new(14)
+        $statusBorder.Margin = [System.Windows.Thickness]::new(0, 10, 0, 0)
+        $statusBorder.HorizontalAlignment = "Center"
+        $statusBorder.CornerRadius = [System.Windows.CornerRadius]::new(12)
         $statusBorder.Background = Get-Brush $script:Palette.NeutralBg
-        $statusBorder.Padding = [System.Windows.Thickness]::new(10, 0, 10, 0)
-        [System.Windows.Controls.Grid]::SetColumn($statusBorder, 1)
+        $statusBorder.Padding = [System.Windows.Thickness]::new(12, 3, 12, 3)
 
         $statusText = New-Object System.Windows.Controls.TextBlock
-        $statusText.VerticalAlignment   = "Center"
         $statusText.HorizontalAlignment = "Center"
         $statusText.FontWeight          = "Bold"
+        $statusText.FontSize            = 12
         $statusText.Text                = "Not done"
         $statusBorder.Child             = $statusText
-        [void]$row.Children.Add($statusBorder)
+        [void]$tileStack.Children.Add($statusBorder)
+
+        $button.Content = $tileStack
 
         $task.Button       = $button
         $task.StatusBorder = $statusBorder
@@ -1515,8 +1584,7 @@ function Build-ActionButtons {
             }
         })
 
-        [void]$actionsPanel.Children.Add($row)
-        $first = $false
+        [void]$actionsPanel.Children.Add($button)
     }
 }
 
@@ -2551,6 +2619,15 @@ function Handle-TaskCompletion {
     finally {
         $script:CurrentProcess = $null
         try { Set-ControlsBusyState -Busy $false } catch { }
+        # Chain the next queued task (used by "Run all"). Runs after busy is cleared;
+        # Start-TaskExecutionFileMode re-arms the busy state for the next script.
+        try {
+            if ($script:RunQueue -and $script:RunQueue.Count -gt 0) {
+                $nextKey = $script:RunQueue.Dequeue()
+                Start-TaskExecutionFileMode -TaskKey $nextKey
+            }
+        }
+        catch { try { Append-LogLine ("Run all chain error: " + $_.Exception.Message) } catch { } }
         Write-CrashLog "Handle-TaskCompletion: exit"
     }
 }
