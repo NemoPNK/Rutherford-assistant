@@ -1295,6 +1295,9 @@ $progressLabelText   = $window.FindName("ProgressLabelText")
 $liveStatusOkText    = $window.FindName("LiveStatusOkText")
 
 $logsListBox.ItemsSource = $script:LogItems
+# Stop the log from dragging the outer page: swallow RequestBringIntoView so the
+# outer ScrollViewer never scrolls to a log item (auto-scroll stays inside the log).
+$logsListBox.Add_RequestBringIntoView({ param($s, $e) $e.Handled = $true })
 $computerNameText.Text   = $env:COMPUTERNAME
 $stateFileText.Text      = $script:StateFilePath
 $computerDateText.Text   = (Get-Date).ToString("dd MMM yyyy - HH:mm:ss")
@@ -1320,6 +1323,22 @@ catch {
 function Get-Brush {
     param([string]$Hex)
     return [System.Windows.Media.BrushConverter]::new().ConvertFromString($Hex)
+}
+
+# Finds the ScrollViewer inside a control's visual tree (e.g. the ListBox's own
+# scroller). Used to auto-scroll the log WITHOUT raising RequestBringIntoView,
+# which would make the outer page ScrollViewer jump down to the logs.
+function Get-DescendantScrollViewer {
+    param($Root)
+    if ($null -eq $Root) { return $null }
+    if ($Root -is [System.Windows.Controls.ScrollViewer]) { return $Root }
+    $count = [System.Windows.Media.VisualTreeHelper]::GetChildrenCount($Root)
+    for ($i = 0; $i -lt $count; $i++) {
+        $child = [System.Windows.Media.VisualTreeHelper]::GetChild($Root, $i)
+        $found = Get-DescendantScrollViewer -Root $child
+        if ($found) { return $found }
+    }
+    return $null
 }
 
 # Returns $true if Language.ps1 flagged that a restart is still pending.
@@ -1382,25 +1401,13 @@ function Set-Status {
 function Apply-StatusVisual {
     param($Border, $Text, [string]$State)
 
-    switch ($State) {
-        "Running" {
-            $Border.Background = Get-Brush "#FEF3C7"
-            $Text.Foreground   = Get-Brush "#92400E"
-        }
-        "Done" {
-            $Border.Background = Get-Brush "#DCFCE7"
-            $Text.Foreground   = Get-Brush "#166534"
-        }
-        "Error" {
-            $Border.Background = Get-Brush "#FEE2E2"
-            $Text.Foreground   = Get-Brush "#B91C1C"
-        }
-        default {
-            $Border.Background = Get-Brush "#232326"
-            $Text.Foreground   = Get-Brush "#374151"
-        }
+    # Kiosk-coherent: no pill background. The tile subtitle is plain text in the
+    # tile's own colour (inherited), matching the mockup. State only changes the text.
+    if ($Border) { $Border.Background = [System.Windows.Media.Brushes]::Transparent }
+    if ($Text) {
+        $Text.Opacity = 0.9
+        $Text.Text = "$State".ToLower()
     }
-    $Text.Text = $State
 }
 
 function Set-ActionState {
@@ -1421,7 +1428,17 @@ function Append-LogLine {
     $timestampedLine = "[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Line.TrimEnd()
     $script:CurrentLogLines.Add($timestampedLine) | Out-Null
     $script:LogItems.Add($timestampedLine)
-    try { $logsListBox.ScrollIntoView($timestampedLine) } catch { }
+
+    # Auto-scroll the log to the newest line WITHOUT ScrollIntoView: that raises
+    # RequestBringIntoView which makes the outer page jump down to the log. Scroll
+    # the ListBox's own internal ScrollViewer to the bottom instead (cached once).
+    try {
+        if (-not $script:LogScrollViewer) {
+            $script:LogScrollViewer = Get-DescendantScrollViewer -Root $logsListBox
+        }
+        if ($script:LogScrollViewer) { $script:LogScrollViewer.ScrollToBottom() }
+    }
+    catch { }
 }
 
 function Set-ControlsBusyState {
