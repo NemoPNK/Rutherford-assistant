@@ -948,21 +948,21 @@ $script:AuditChecks = Discover-AuditChecks
                     Margin="20,0,0,0"
                     Height="48"
                     CornerRadius="24"
-                    Background="#DCFCE7"
-                    BorderBrush="#63B02F"
-                    BorderThickness="2">
+                    Background="Transparent"
+                    BorderBrush="Transparent"
+                    BorderThickness="0">
               <StackPanel VerticalAlignment="Center">
                 <TextBlock Name="ProgressPercentText"
                            Text="0%"
                            FontSize="20"
                            FontWeight="Bold"
-                           Foreground="#166534"
+                           Foreground="#9AE66E"
                            HorizontalAlignment="Center" />
                 <TextBlock Name="ProgressLabelText"
                            Text="READY"
                            FontSize="10"
                            FontWeight="Bold"
-                           Foreground="#166534"
+                           Foreground="#9AE66E"
                            HorizontalAlignment="Center" />
               </StackPanel>
             </Border>
@@ -994,14 +994,14 @@ $script:AuditChecks = Discover-AuditChecks
                 <Border Margin="12,0,0,0"
                         VerticalAlignment="Center"
                         CornerRadius="14"
-                        Background="#DCFCE7"
-                        BorderBrush="#63B02F"
-                        BorderThickness="2"
-                        Padding="12,3">
+                        Background="Transparent"
+                        BorderBrush="Transparent"
+                        BorderThickness="0"
+                        Padding="4,3">
                   <TextBlock Name="LiveStatusOkText"
-                             FontSize="13"
+                             FontSize="14"
                              FontWeight="Bold"
-                             Foreground="#166534"
+                             Foreground="#9AE66E"
                              Text="0 / 0 OK" />
                 </Border>
               </StackPanel>
@@ -1097,11 +1097,11 @@ $script:AuditChecks = Discover-AuditChecks
                              VerticalAlignment="Center" />
                   <Border Margin="10,0,0,0"
                           CornerRadius="10"
-                          Background="#EAF6E0"
-                          Padding="9,2">
+                          Background="Transparent"
+                          Padding="2,2">
                     <TextBlock Name="AuditSummaryText"
-                               Foreground="#1F4D11"
-                               FontSize="12"
+                               Foreground="#9AE66E"
+                               FontSize="14"
                                FontWeight="Bold"
                                Text="0 / 0" />
                   </Border>
@@ -1127,11 +1127,11 @@ $script:AuditChecks = Discover-AuditChecks
                              VerticalAlignment="Center" />
                   <Border Margin="10,0,0,0"
                           CornerRadius="10"
-                          Background="#E6F4FF"
-                          Padding="9,2">
+                          Background="Transparent"
+                          Padding="2,2">
                     <TextBlock Name="NetworkSummaryText"
-                               Foreground="#0C447C"
-                               FontSize="12"
+                               Foreground="#7FD3FF"
+                               FontSize="14"
                                FontWeight="Bold"
                                Text="0 / 0" />
                   </Border>
@@ -1677,11 +1677,11 @@ function Add-NetworkCardElement {
     $statusBorder.VerticalAlignment = "Center"
     $statusBorder.HorizontalAlignment = "Right"
     if ($Snapshot.Status -eq "success") {
-        $statusBorder.Background = Get-Brush "#DCFCE7"
-        $statusFg = "#166534"
+        $statusBorder.Background = [System.Windows.Media.Brushes]::Transparent
+        $statusFg = "#9AE66E"
     } else {
-        $statusBorder.Background = Get-Brush "#FEE2E2"
-        $statusFg = "#B91C1C"
+        $statusBorder.Background = [System.Windows.Media.Brushes]::Transparent
+        $statusFg = "#FCA5A5"
     }
 
     $statusText = New-Object System.Windows.Controls.TextBlock
@@ -1732,11 +1732,11 @@ function Get-AuditStatusVisual {
     param([string]$Status)
 
     switch ($Status) {
-        "ok"      { return @{ Bg = "#DCFCE7"; Fg = "#166534"; Label = "OK" } }
-        "missing" { return @{ Bg = "#FEE2E2"; Fg = "#B91C1C"; Label = "Missing" } }
-        "partial" { return @{ Bg = "#FEF3C7"; Fg = "#92400E"; Label = "Partial" } }
-        "unknown" { return @{ Bg = "#E5E7EB"; Fg = "#374151"; Label = "Unknown" } }
-        default   { return @{ Bg = "#E5E7EB"; Fg = "#374151"; Label = "Unknown" } }
+        "ok"      { return @{ Bg = "Transparent"; Fg = "#9AE66E"; Label = "OK" } }
+        "missing" { return @{ Bg = "Transparent"; Fg = "#FCA5A5"; Label = "Missing" } }
+        "partial" { return @{ Bg = "Transparent"; Fg = "#FBBF24"; Label = "Partial" } }
+        "unknown" { return @{ Bg = "Transparent"; Fg = "#A1A1AA"; Label = "Unknown" } }
+        default   { return @{ Bg = "Transparent"; Fg = "#A1A1AA"; Label = "Unknown" } }
     }
 }
 
